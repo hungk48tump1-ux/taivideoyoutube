@@ -1,0 +1,20 @@
+﻿{
+    "host": "127.0.0.1",
+    "port": "8777",
+    "api_key": "",
+    "whisk_file": "C:/Users/duong/Documents/kenh t2 2026/KR 21/2004 kr21\\30whisk_2004 kr21_2004_0956.txt",
+    "veo_file": "C:/Users/duong/Documents/kenh t2 2026/KR 21/2004 kr21\\30VEO3_2004 kr21_2004_0956.txt",
+    "luot2_file": "C:/Users/duong/Documents/kenh t2 2026/KR 21/2004 kr21\\luot2_tro_di_2004 kr21_2004_0956.txt",
+    "ref_image_file": "C:/Users/duong/Documents/kenh t2 2026/KR 21/nhan vat kr21.jpg",
+    "image_model": "imagen4",
+    "video_model": "veo_31_fast_relaxed",
+    "aspect_ratio": "16:9",
+    "resolution": "720p",
+    "threads": "30",
+    "saved_references": {
+        "KR3": "C:/Users/duong/Documents/kenh t1 2026/kr3/Whisk_e9d99fb8b0280a1b9b24fd5e7b15a002eg.png",
+        "KR21": "C:/Users/duong/Documents/kenh t2 2026/KR 21/nhan vat kr21.jpg",
+        "JP2 TIEN VANG": "C:/Users/duong/Documents/kenh t3 2026/JP2/nhan vat jp2.jpg"
+    }
+}
+

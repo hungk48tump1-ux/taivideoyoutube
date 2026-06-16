@@ -1,0 +1,199 @@
+{
+  "_comment": "Gemini UI Selectors - chỉnh sửa file này nếu Gemini thay đổi giao diện",
+  "_version": "2026-05",
+  "_instructions": "Mỗi selector có thể là string hoặc list. Nếu là list thì app sẽ thử từng selector theo thứ tự cho đến khi tìm thấy.",
+
+  "chat_input": {
+    "_description": "Ô nhập chat chính",
+    "selectors": [
+      "div[contenteditable='true'][data-placeholder]",
+      "rich-textarea div[contenteditable='true']",
+      "div[contenteditable='true']",
+      "textarea[placeholder]",
+      "[aria-label='Enter a prompt here']",
+      "p[data-placeholder]"
+    ]
+  },
+
+  "send_button": {
+    "_description": "Nút gửi tin nhắn",
+    "selectors": [
+      "button[aria-label='Send message']",
+      "button[aria-label*='Gửi']",
+      "button[aria-label*='Send']",
+      "button[data-test-id='send-button']",
+      "button[aria-label='Submit']",
+      "button.send-button",
+      "button[jsname='Qx7uuf']",
+      "[data-mat-icon-name='send']"
+    ]
+  },
+
+  "add_menu_button": {
+    "_description": "Nút dấu cộng mở menu thêm tệp/công cụ trong ô chat Gemini",
+    "selectors": [
+      "button[aria-label*='Add']",
+      "button[aria-label*='Thêm']",
+      "button[aria-label*='Upload']",
+      "button[aria-label*='Tải']",
+      "button[mattooltip*='Add']",
+      "button[mattooltip*='Thêm']",
+      "button:has(mat-icon:has-text('add'))",
+      "button:has([data-mat-icon-name='add'])",
+      "button:has-text('+')"
+    ]
+  },
+
+  "upload_file_option": {
+    "_description": "Mục Tải tệp lên trong menu dấu cộng Gemini",
+    "selectors": [
+      "button:has-text('Tải tệp lên')",
+      "div[role='menuitem']:has-text('Tải tệp lên')",
+      "[role='menuitem']:has-text('Tải tệp lên')",
+      "span:has-text('Tải tệp lên')",
+      "button:has-text('Upload files')",
+      "div[role='menuitem']:has-text('Upload files')",
+      "[role='menuitem']:has-text('Upload files')",
+      "span:has-text('Upload files')",
+      "button:has-text('Upload file')",
+      "[role='menuitem']:has-text('Upload file')",
+      "span:has-text('Upload file')"
+    ]
+  },
+
+  "stop_button": {
+    "_description": "Nút dừng / Stop generating",
+    "selectors": [
+      "button[aria-label*='Dừng']",
+      "button[mattooltip*='Dừng']",
+      "button[aria-label*='Stop generating']",
+      "button[aria-label*='Stop response']",
+      "button[aria-label*='Stop']",
+      "button[mattooltip*='Stop']",
+      "button.stop-button",
+      "[data-test-id='stop-button']",
+      "button[jsname='wtpab']"
+    ]
+  },
+
+  "model_selector_button": {
+    "_description": "Nút dropdown chọn model",
+    "selectors": [
+      "button:has-text('Nhanh')",
+      "button:has-text('Pro')",
+      "button:has-text('Tư duy')",
+      "button:has-text('Thinking')",
+      "div.model-selection button",
+      "button[aria-label*='model']",
+      "button[aria-label*='Model']",
+      "mat-select[aria-label*='model']",
+      "[data-test-id='model-switcher']",
+      "button[mattooltip*='model']",
+      "button[mattooltip*='Model']",
+      ".model-switcher-button",
+      "button[aria-label*='Gemini']"
+    ]
+  },
+
+  "model_option": {
+    "_description": "Các option model trong dropdown",
+    "selectors": [
+      "mat-option",
+      "mat-radio-button",
+      "li[role='option']",
+      "button[role='option']",
+      "div[role='option']",
+      "div[role='menuitem']",
+      ".model-option",
+      "span.model-name"
+    ]
+  },
+
+  "response_container": {
+    "_description": "Container chứa response của Gemini",
+    "selectors": [
+      "model-response",
+      "message-content",
+      "div[data-message-author-role='model']",
+      ".response-container",
+      "div.model-response-text",
+      "response-element"
+    ]
+  },
+
+  "loading_spinner": {
+    "_description": "Spinner/loading indicator khi Gemini đang xử lý",
+    "selectors": [
+      "div[aria-label*='Đang tạo']",
+      "div[aria-label*='Đang xử lý']",
+      "div[aria-label*='Generating']",
+      "div[aria-label*='Processing']",
+      ".loading-indicator",
+      "mat-spinner",
+      "div.spinner",
+      "[data-test-id='loading']",
+      "div[class*='pending']",
+      "div[class*='loading']",
+      "lottie-player"
+    ]
+  },
+
+  "popup_close_button": {
+    "_description": "Nút đóng popup/dialog phụ",
+    "selectors": [
+      "button[aria-label='Close']",
+      "button[aria-label='Dismiss']",
+      "button[aria-label*='Đóng']",
+      "button[mat-dialog-close]",
+      ".mat-dialog-close",
+      "button.close-button",
+      "[data-test-id='close-dialog']"
+    ]
+  },
+
+  "new_chat_button": {
+    "_description": "Nút tạo cuộc trò chuyện mới",
+    "selectors": [
+      "a[aria-label='New chat']",
+      "button[aria-label='New chat']",
+      "button[aria-label*='Cuộc trò chuyện mới']",
+      "button[data-test-id='new-chat']",
+      "a[href='/app']",
+      "button[mattooltip='New chat']"
+    ]
+  },
+
+  "regenerate_button": {
+    "_description": "Nút mũi tên xoay tròn / regenerate của câu trả lời cuối cùng",
+    "selectors": [
+      "button[aria-label*='Sửa đổi']",
+      "button[mattooltip*='Sửa đổi']",
+      "button[aria-label*='Modify']",
+      "button[mattooltip*='Modify']",
+      "button[aria-label*='Khôi phục']",
+      "button[mattooltip*='Khôi phục']",
+      "button[aria-label*='Tạo lại']",
+      "button[mattooltip*='Tạo lại']",
+      "button[aria-label*='Thử lại']",
+      "button[mattooltip*='Thử lại']",
+      "button[aria-label*='Regenerate']",
+      "button[mattooltip*='Regenerate']",
+      "button[aria-label*='Retry']",
+      "button[mattooltip*='Retry']"
+    ]
+  },
+
+  "regenerate_option": {
+    "_description": "Option Thử lại khi bấm vào nút regenerate",
+    "selectors": [
+      "*:has-text('Thử lại')",
+      "*:has-text('Tạo lại')",
+      "*:has-text('Regenerate')",
+      "*:has-text('Retry')",
+      "role=menuitem >> text='Thử lại'",
+      "role=menuitem >> text='Tạo lại'",
+      "role=menuitem >> text='Regenerate'",
+      "role=menuitem >> text='Retry'"
+    ]
+  }
+}

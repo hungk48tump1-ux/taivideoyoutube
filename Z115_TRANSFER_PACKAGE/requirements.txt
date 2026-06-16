@@ -1,0 +1,16 @@
+# Audio transcription
+openai-whisper
+faster-whisper
+
+# Audio processing
+scipy
+soundfile
+librosa
+numpy
+
+# PyTorch (cài thủ công theo GPU - xem setup.bat)
+# GPU (CUDA 12.1): pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+# CPU only:        pip install torch torchvision torchaudio
+
+# API Requests (Step 3 Pipeline)
+requests

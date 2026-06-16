@@ -1,0 +1,30 @@
+{
+  "manifest_version": 3,
+  "name": "Z115 DHVIPPRO Bridge",
+  "version": "1.1",
+  "description": "Cầu nối siêu tốc giữa App Python Z115 và Google Gemini",
+  "permissions": [
+    "activeTab",
+    "clipboardWrite",
+    "clipboardRead",
+    "debugger",
+    "alarms",
+    "tabs"
+  ],
+  "host_permissions": [
+    "http://localhost/*",
+    "http://127.0.0.1/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://gemini.google.com/*"],
+      "js": ["selectors.js", "content.js"]
+    }
+  ],
+  "action": {
+    "default_title": "Z115 Bridge"
+  }
+}

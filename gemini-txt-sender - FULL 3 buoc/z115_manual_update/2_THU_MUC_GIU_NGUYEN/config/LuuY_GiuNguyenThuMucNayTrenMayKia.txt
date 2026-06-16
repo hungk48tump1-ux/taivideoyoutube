@@ -1,0 +1,4 @@
+LUU Y QUAN TRONG:
+Thu muc nay chua file config.json (Preset The Loai, API Key, cau hinh rieng cua may do).
+
+👉 Khi cap nhat phan mem sang may khac, anh tuyet doi KHONG DE thu muc nay de len thu muc cu cua may do!

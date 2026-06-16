@@ -1,0 +1,18 @@
+HUONG DAN CAP NHAT PHAN MEM THU CONG SANG MAY TINH KHAC:
+
+Buoc 1: Nen hoac sao chep TOAN BO noi dung nam BEN TRONG thu muc:
+        👉 '1_THU_MUC_CAN_COPY'
+        (Day la code phien ban moi nhat vua duoc cap nhat)
+
+Buoc 2: Sang may tinh can cap nhat, DAN DE (Paste & Replace) tat ca cac file vua copy o tren
+        vao thu muc cai phan mem cua may do.
+
+Buoc 3: LUU Y TUYET DOI:
+        👉 KHONG DUOC COPY cac thu muc nam trong '2_THU_MUC_GIU_NGUYEN' de sang may kia.
+        (Dieu nay giup may kia giu nguyen 100% Cai dat Preset The loai, API Key, Chrome cua no)
+
+Buoc 4: Cap nhat Extension tren trinh duyet Chrome cua may kia:
+        - Mo Chrome tren may kia, truy cap link: chrome://extensions/
+        - Bam nut "Tai lai" (Reload 🔁) o the Addon 'Z115_DHVIPPRO' de Chrome nap code content.js moi nhat.
+
+Chuc anh thuc hien thanh cong!

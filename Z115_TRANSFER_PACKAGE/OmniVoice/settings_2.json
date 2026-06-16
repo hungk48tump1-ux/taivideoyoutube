@@ -1,0 +1,1 @@
+{"num_step": 60, "guidance_scale": 7.0, "denoise": true, "speed": 0.9, "duration": 0, "preprocess": true, "postprocess": true, "seed": 333, "chunk_mode": "Cắt gộp thông minh", "chunk_words": 20}
