@@ -35,7 +35,7 @@ def load_json(path: str, default: dict = None) -> dict:
     if not p.exists():
         return default or {}
     try:
-        return json.loads(p.read_text(encoding="utf-8"))
+        return json.loads(p.read_text(encoding="utf-8-sig"))
     except Exception as e:
         print(f"[WARNING] Không đọc được {path}: {e}")
         return default or {}

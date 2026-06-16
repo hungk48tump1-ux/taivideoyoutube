@@ -1692,7 +1692,7 @@ class App(tk.Tk):
             cfg_path = Path("config") / "config.json"
             cfg_path.parent.mkdir(parents=True, exist_ok=True)
             if cfg_path.exists():
-                data = json.loads(cfg_path.read_text(encoding="utf-8"))
+                data = json.loads(cfg_path.read_text(encoding="utf-8-sig"))
             else:
                 data = {}
                 

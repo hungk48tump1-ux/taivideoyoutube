@@ -1,4 +1,4 @@
-﻿{
+{
   "_comment": "Gemini TXT Chunk Sender - Main Configuration",
   "gemini_url": "https://gemini.google.com/gem/2b600f8a6238",
   "target_model_text": "Pro",
