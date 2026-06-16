@@ -91,6 +91,8 @@ class GeminiBridgeRequestHandler(BaseHTTPRequestHandler):
                         if job["designated_tab_id"] == tab_id and job["pending_chunk"]:
                             data = job["pending_chunk"]
                             data["_from_job"] = jid  # Để addon biết gửi result về đúng luồng
+                            if data.get("cmd") == "redirect":
+                                job["pending_chunk"] = None
                             break
                 self.wfile.write(json.dumps(data).encode("utf-8"))
                 return
@@ -108,6 +110,8 @@ class GeminiBridgeRequestHandler(BaseHTTPRequestHandler):
                 if not tab_id:
                     # Extension cũ không gửi tab_id → cho qua bình thường (tương thích ngược)
                     data = job["pending_chunk"] if job["pending_chunk"] else {"cmd": "idle"}
+                    if data.get("cmd") == "redirect":
+                        job["pending_chunk"] = None
 
                 elif designated is None:
                     # Chưa có tab nào → tự động chỉ định tab này
@@ -115,11 +119,15 @@ class GeminiBridgeRequestHandler(BaseHTTPRequestHandler):
                     job["last_heartbeat"] = now
                     logger.info("[Bridge] Auto-designated tab '%s' cho job '%s'", tab_id[:8], job_id)
                     data = job["pending_chunk"] if job["pending_chunk"] else {"cmd": "idle", "designated": True}
+                    if data.get("cmd") == "redirect":
+                        job["pending_chunk"] = None
 
                 elif designated == tab_id:
                     # Đúng tab được chỉ định → cập nhật heartbeat
                     job["last_heartbeat"] = now
                     data = job["pending_chunk"] if job["pending_chunk"] else {"cmd": "idle", "designated": True}
+                    if data.get("cmd") == "redirect":
+                        job["pending_chunk"] = None
 
                 else:
                     # Tab khác đang chạy → từ chối
@@ -1247,6 +1255,16 @@ class App(tk.Tk):
         val = self._saved_urls.get(raw, {})
         return val.get("url", raw)
 
+    def _url_with_job_param(self, url: str, job_id: str) -> str:
+        try:
+            parsed = urllib.parse.urlparse(url)
+            query = dict(urllib.parse.parse_qsl(parsed.query, keep_blank_values=True))
+            query["z115_job"] = job_id
+            return urllib.parse.urlunparse(parsed._replace(query=urllib.parse.urlencode(query)))
+        except Exception:
+            sep = "&" if "?" in url else "?"
+            return f"{url}{sep}z115_job={job_id}"
+
     def _save_settings_for_preset(self, name):
         if not name: return
         preset = self._saved_urls.get(name, {})
@@ -1875,7 +1893,7 @@ class App(tk.Tk):
         self.log(f"Đang khởi động trình duyệt → {url}")
         self.v_status.set("Đang mở trình duyệt...")
 
-        url_with_param = f"{url}?z115_job=auto" if "?" not in url else f"{url}&z115_job=auto"
+        url_with_param = self._url_with_job_param(url, "auto")
 
         def task():
             if self._open_gemini_browser(url_with_param, "mở tab Gemini"):
@@ -2606,20 +2624,17 @@ class App(tk.Tk):
 
         # ── Hướng dẫn Người dùng sử dụng Extension Bridge ──
         url = self._get_url_for_job(job_name) or "https://gemini.google.com/app"
+        preset_name = (self.v_url2 if job_name == "File 2" else self.v_url).get().strip()
         
         # Thêm query param z115_job để Extension tự động nhận diện và gán luồng không cần click
-        job_param = "file2" if job_name == "File 2" else "file1"
-        if "?" in url:
-            url_with_param = f"{url}&z115_job={job_param}"
-        else:
-            url_with_param = f"{url}?z115_job={job_param}"
+        job_id = "file2" if job_name == "File 2" else "file1"
+        url_with_param = self._url_with_job_param(url, job_id)
 
         self.log("🔗 Vui lòng mở trình duyệt Edge/Chrome thật của bạn và truy cập Gemini.", "INFO")
+        self.log(f"📂 Thể loại {job_name}: {preset_name} → {url}", "INFO")
         self.log(f"📌 Tab Gemini sẽ tự động liên kết với luồng: {'FILE 1' if job_name != 'File 2' else 'FILE 2'}", "SUCCESS")
         
         # Mở URL tự động bằng trình duyệt đã cấu hình hoặc mặc định
-        job_id = "file2" if job_name == "File 2" else "file1"
-        
         # Quét đúng tab của luồng hiện tại. File 2 không được dùng nhầm heartbeat của File 1.
         tab_is_alive = False
         with _bridge_lock:
@@ -2654,12 +2669,12 @@ class App(tk.Tk):
         self.log("✅ Đã tìm thấy Tab đang hoạt động! Đã khóa tab này thành Worker duy nhất.", "SUCCESS")
         
         # Luôn yêu cầu Tab bẻ lái sang đúng link của luồng hiện tại (dù là File 1 hay File 2)
-        self.log(f"🌐 Yêu cầu Tab hiện tại bẻ lái sang Link của {job_name}...", "INFO")
+        self.log(f"🌐 Yêu cầu Tab hiện tại bẻ lái sang Link của {job_name}: {url}", "INFO")
         with _bridge_lock:
-            # Gửi lệnh redirect (dùng url gốc, không cần param để tránh F5 liên tục)
+            # Gửi lệnh redirect một lần, kèm z115_job để addon giữ đúng luồng sau khi trang reload.
             BRIDGE_JOBS[job_id]["pending_chunk"] = {
                 "cmd": "redirect",
-                "url": url
+                "url": url_with_param
             }
         time.sleep(4)  # Chờ 4s cho tab bẻ lái xong
 
@@ -2730,7 +2745,10 @@ class App(tk.Tk):
 
                 job_id = "file2" if job_name == "File 2" else "file1"
                 try:
-                    initial_url = self._get_url_for_job(job_name) or "https://gemini.google.com/app"
+                    initial_url = self._url_with_job_param(
+                        self._get_url_for_job(job_name) or "https://gemini.google.com/app",
+                        job_id
+                    )
                     success, response_data = self._send_chunk_via_addon(
                         job_id=job_id,
                         chunk_index=chunk.index,
