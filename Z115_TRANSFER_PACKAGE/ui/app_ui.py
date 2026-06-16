@@ -9,6 +9,7 @@ KIẾN TRÚC THREAD:
 import json
 import importlib.util
 import queue
+import shutil
 import subprocess
 import threading
 import time
@@ -16,7 +17,7 @@ import os
 import tkinter as tk
 from datetime import datetime
 from pathlib import Path
-from tkinter import filedialog, messagebox, scrolledtext, ttk
+from tkinter import filedialog, messagebox, scrolledtext, simpledialog, ttk
 from typing import Any, Callable, Dict, List, Optional
 
 from core.logger import get_logger
@@ -1413,6 +1414,14 @@ class App(tk.Tk):
         if current_voice and current_voice in saved_voices:
             voice_combo.set(current_voice)
 
+        def _add_voice_from_preset():
+            new_voice = self._add_omnivoice_voice(parent=dlg)
+            if new_voice:
+                voice_combo["values"] = self._get_omnivoice_saved_voices()
+                v_sample.set(new_voice)
+
+        tk.Button(sample_entry, text="+ Thêm", command=_add_voice_from_preset).pack(side="left", padx=2)
+
         def _save():
             name = v_name.get().strip()
             url = v_url.get().strip()
@@ -1487,6 +1496,69 @@ class App(tk.Tk):
             return []
         return sorted([f[:-4] for f in os.listdir(voices_dir) if f.endswith(".wav")])
 
+    def _get_omnivoice_saved_voices_dir(self) -> Path:
+        return Path(self._get_omnivoice_dir()) / "saved_voices"
+
+    def _sanitize_omnivoice_voice_name(self, name: str) -> str:
+        cleaned = "".join("_" if ch in '\\/:*?"<>|' else ch for ch in str(name).strip())
+        cleaned = " ".join(cleaned.split())
+        return cleaned.strip(" .")
+
+    def _add_omnivoice_voice(self, parent=None) -> Optional[str]:
+        src = filedialog.askopenfilename(
+            parent=parent,
+            title="Chọn file giọng mẫu OmniVoice (.wav)",
+            filetypes=[("WAV audio", "*.wav"), ("All files", "*.*")]
+        )
+        if not src:
+            return None
+
+        src_path = Path(src)
+        if src_path.suffix.lower() != ".wav":
+            messagebox.showwarning("File chưa hỗ trợ", "Hiện app chỉ thêm giọng OmniVoice từ file .wav.", parent=parent)
+            return None
+        if not src_path.exists():
+            messagebox.showwarning("Thiếu file", "File giọng mẫu không tồn tại.", parent=parent)
+            return None
+
+        default_name = self._sanitize_omnivoice_voice_name(src_path.stem)
+        voice_name = simpledialog.askstring(
+            "Tên giọng mới",
+            "Nhập tên hiển thị cho giọng OmniVoice:",
+            initialvalue=default_name,
+            parent=parent
+        )
+        voice_name = self._sanitize_omnivoice_voice_name(voice_name or "")
+        if not voice_name:
+            messagebox.showwarning("Thiếu tên", "Tên giọng không được để trống.", parent=parent)
+            return None
+
+        voices_dir = self._get_omnivoice_saved_voices_dir()
+        voices_dir.mkdir(parents=True, exist_ok=True)
+        dest_wav = voices_dir / f"{voice_name}.wav"
+        dest_txt = voices_dir / f"{voice_name}.txt"
+
+        if dest_wav.exists() and not messagebox.askyesno(
+            "Ghi đè giọng?",
+            f"Giọng '{voice_name}' đã tồn tại. Bạn có muốn ghi đè không?",
+            parent=parent
+        ):
+            return None
+
+        try:
+            shutil.copy2(src_path, dest_wav)
+            src_txt = src_path.with_suffix(".txt")
+            if src_txt.exists():
+                shutil.copy2(src_txt, dest_txt)
+            elif not dest_txt.exists():
+                dest_txt.write_text("", encoding="utf-8")
+            self.log(f"✅ Đã thêm giọng OmniVoice: {voice_name}", "SUCCESS")
+            return voice_name
+        except Exception as e:
+            self.log(f"Lỗi thêm giọng OmniVoice: {e}", "ERROR")
+            messagebox.showerror("Lỗi thêm giọng", str(e), parent=parent)
+            return None
+
     def _fix_omnivoice_text_setting(self, value):
         if not isinstance(value, str) or not any(ch in value for ch in ("Ã", "Â", "á»", "Ä")):
             return value
@@ -1554,14 +1626,23 @@ class App(tk.Tk):
             tk.Label(frm, text="Giọng mẫu:", font=FS, fg=C["text"], bg=C["bg"]).grid(row=row, column=0, sticky="w", pady=3)
             saved_voices = self._get_omnivoice_saved_voices()
             v_voice = tk.StringVar(value=s.get("sample_voice", ""))
-            ttk.Combobox(
+            voice_combo = ttk.Combobox(
                 frm,
                 textvariable=v_voice,
                 values=[""] + saved_voices,
                 state="readonly",
                 font=FS,
                 width=24
-            ).grid(row=row, column=1, sticky="w", pady=3)
+            )
+            voice_combo.grid(row=row, column=1, sticky="w", pady=3)
+
+            def _add_voice_from_ov():
+                new_voice = self._add_omnivoice_voice(parent=dlg)
+                if new_voice:
+                    voice_combo["values"] = [""] + self._get_omnivoice_saved_voices()
+                    v_voice.set(new_voice)
+
+            tk.Button(frm, text="+ Thêm", font=FS, command=_add_voice_from_ov).grid(row=row, column=2, sticky="w", padx=(4, 0), pady=3)
 
             row += 1
             # num_step
