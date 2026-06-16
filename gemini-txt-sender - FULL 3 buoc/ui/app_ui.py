@@ -816,11 +816,14 @@ class App(tk.Tk):
         
         row = tk.Frame(bf, bg=C["bg"])
         row.pack(fill="x", pady=2)
-        tk.Label(row, text="Đường dẫn Chrome:", font=FS, fg=C["dim"], bg=C["bg"]).pack(side="left")
+        tk.Label(row, text="Đường dẫn Edge/Chrome:", font=FS, fg=C["dim"], bg=C["bg"]).pack(side="left")
         
         def _br_chrome():
             p_file = filedialog.askopenfilename(filetypes=[("Executable files", "*.exe")])
-            if p_file: self.v_custom_browser_path.set(p_file)
+            if p_file:
+                self.v_custom_browser_path.set(p_file)
+                self.config["custom_browser_path"] = p_file
+                self._save_all_settings()
             
         _btn(row, "...", _br_chrome, width=3).pack(side="right", padx=(4, 0))
         _entry(row, var=self.v_custom_browser_path).pack(side="right", fill="x", expand=True, padx=4)
@@ -1747,6 +1750,7 @@ class App(tk.Tk):
             data["pl_ref_image_2"] = self.pl_ref_image2.get()
             
             cfg_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+            self.config = data
         except Exception as e:
             self.log(f"⚠️ Không lưu được config: {e}", "WARNING")
 
@@ -1825,6 +1829,45 @@ class App(tk.Tk):
         except Exception as e:
             self.log_job(job_name or "File 1", f"Lỗi đọc file: {e}", "ERROR")
 
+    def _known_edge_paths(self) -> List[Path]:
+        paths = [
+            Path(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")) / "Microsoft" / "Edge" / "Application" / "msedge.exe",
+            Path(os.environ.get("ProgramFiles", r"C:\Program Files")) / "Microsoft" / "Edge" / "Application" / "msedge.exe",
+        ]
+        local_app = os.environ.get("LOCALAPPDATA")
+        if local_app:
+            paths.append(Path(local_app) / "Microsoft" / "Edge" / "Application" / "msedge.exe")
+        return paths
+
+    def _resolve_browser_path(self) -> Optional[Path]:
+        configured = str(self.config.get("custom_browser_path", "")).strip().strip('"')
+        if configured:
+            path = Path(os.path.expandvars(os.path.expanduser(configured)))
+            if path.exists():
+                return path
+            self.log(f"⚠️ Không tìm thấy trình duyệt đã cấu hình: {configured}", "WARNING")
+
+        for path in self._known_edge_paths():
+            if path.exists():
+                self.config["custom_browser_path"] = str(path)
+                return path
+        return None
+
+    def _open_gemini_browser(self, url: str, action: str = "mở Gemini") -> bool:
+        try:
+            browser_path = self._resolve_browser_path()
+            if browser_path:
+                self.log(f"🌐 Đang {action} bằng Edge/Chrome: {browser_path}", "INFO")
+                subprocess.Popen([str(browser_path), "--new-window", "--start-maximized", url])
+            else:
+                self.log("🌐 Không tìm thấy Edge trong máy; mở bằng trình duyệt mặc định...", "WARNING")
+                import webbrowser
+                webbrowser.open(url)
+            return True
+        except Exception as e:
+            self.log(f"❌ Lỗi {action}: {e}", "ERROR")
+            return False
+
     def _launch(self):
         """Khởi động browser lần đầu."""
         url = self._get_active_url() or "https://gemini.google.com/app"
@@ -1835,19 +1878,10 @@ class App(tk.Tk):
         url_with_param = f"{url}?z115_job=auto" if "?" not in url else f"{url}&z115_job=auto"
 
         def task():
-            try:
-                browser_path = str(self.config.get("custom_browser_path", "")).strip()
-                if browser_path and Path(browser_path).exists():
-                    self.log(f"🌐 Mở Tab mới bằng trình duyệt tùy chỉnh: {browser_path}", "INFO")
-                    subprocess.Popen([browser_path, "--start-maximized", url_with_param])
-                else:
-                    self.log("🌐 Mở Tab mới bằng trình duyệt mặc định...", "INFO")
-                    import webbrowser
-                    webbrowser.open(url_with_param)
+            if self._open_gemini_browser(url_with_param, "mở tab Gemini"):
                 self.log("✅ Browser đã mở thành công!", "SUCCESS")
                 self.v_status.set("Browser sẵn sàng — đăng nhập nếu cần")
-            except Exception as e:
-                self.log(f"❌ Lỗi khởi động browser: {e}", "ERROR")
+            else:
                 self.v_status.set("Lỗi")
         threading.Thread(target=task, daemon=True).start()
 
@@ -1867,17 +1901,9 @@ class App(tk.Tk):
 
         if not self._playwright_available:
             def fallback_task():
-                try:
-                    browser_path = str(self.config.get("custom_browser_path", "")).strip()
-                    if browser_path and Path(browser_path).exists():
-                        subprocess.Popen([browser_path, "--start-maximized", url])
-                    else:
-                        import webbrowser
-                        webbrowser.open(url)
+                if self._open_gemini_browser(url, "mở URL"):
                     self.log(f"✅ Đã mở bằng trình duyệt thường: {url}", "SUCCESS")
                     self.v_status.set("Đã mở URL")
-                except Exception as e:
-                    self.log(f"❌ Lỗi mở URL: {e}", "ERROR")
             threading.Thread(target=fallback_task, daemon=True).start()
             return
 
@@ -2588,29 +2614,23 @@ class App(tk.Tk):
         else:
             url_with_param = f"{url}?z115_job={job_param}"
 
-        self.log("🔗 Vui lòng mở trình duyệt Chrome thật của bạn và truy cập Gemini.", "INFO")
+        self.log("🔗 Vui lòng mở trình duyệt Edge/Chrome thật của bạn và truy cập Gemini.", "INFO")
         self.log(f"📌 Tab Gemini sẽ tự động liên kết với luồng: {'FILE 1' if job_name != 'File 2' else 'FILE 2'}", "SUCCESS")
         
         # Mở URL tự động bằng trình duyệt đã cấu hình hoặc mặc định
         job_id = "file2" if job_name == "File 2" else "file1"
         
-        # Quét xem có tab nào đang sống không
+        # Quét đúng tab của luồng hiện tại. File 2 không được dùng nhầm heartbeat của File 1.
         tab_is_alive = False
         with _bridge_lock:
-            for jid in BRIDGE_JOBS:
-                if BRIDGE_JOBS[jid]["designated_tab_id"] and (time.time() - BRIDGE_JOBS[jid]["last_heartbeat"]) < 15:
-                    tab_is_alive = True
-                    break
+            job_state = BRIDGE_JOBS[job_id]
+            tab_is_alive = bool(
+                job_state["designated_tab_id"]
+                and (time.time() - job_state["last_heartbeat"]) < 15
+            )
         
         if not tab_is_alive:
-            browser_path = str(self.config.get("custom_browser_path", "")).strip()
-            if browser_path and Path(browser_path).exists():
-                self.log(f"🌐 Tự động mở Tab mới bằng trình duyệt tùy chỉnh: {browser_path}", "INFO")
-                subprocess.Popen([browser_path, "--start-maximized", url_with_param])
-            else:
-                self.log("🌐 Tự động mở Tab mới bằng trình duyệt mặc định...", "INFO")
-                import webbrowser
-                webbrowser.open(url_with_param)
+            self._open_gemini_browser(url_with_param, f"mở tab Gemini cho {job_name}")
             
             self.log("⏳ Đang chờ trình duyệt kết nối tự động...", "WARNING")
         
@@ -2618,10 +2638,11 @@ class App(tk.Tk):
         while True:
             tab_is_alive = False
             with _bridge_lock:
-                for jid in BRIDGE_JOBS:
-                    if BRIDGE_JOBS[jid]["designated_tab_id"] and (time.time() - BRIDGE_JOBS[jid]["last_heartbeat"]) < 15:
-                        tab_is_alive = True
-                        break
+                job_state = BRIDGE_JOBS[job_id]
+                tab_is_alive = bool(
+                    job_state["designated_tab_id"]
+                    and (time.time() - job_state["last_heartbeat"]) < 15
+                )
             
             if tab_is_alive:
                 break
