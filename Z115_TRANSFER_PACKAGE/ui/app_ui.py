@@ -1485,7 +1485,7 @@ class App(tk.Tk):
             "num_step": 32, "guidance_scale": 2.0, "denoise": True,
             "speed": 1.0, "duration": 0, "preprocess": True,
             "postprocess": True, "seed": -1, "chunk_mode": "Không cắt",
-            "chunk_words": 25, "language": "Tự động", "sample_voice": ""
+            "chunk_words": 25, "num_threads": 1, "language": "Tự động", "sample_voice": ""
         }
         try:
             with open(settings_path, "r", encoding="utf-8") as f:
@@ -1517,7 +1517,7 @@ class App(tk.Tk):
 
             dlg = tk.Toplevel(self)
             dlg.title(f"⚙️ Cài Đặt OmniVoice - Luồng {job_id}")
-            dlg.geometry("500x580")
+            dlg.geometry("500x620")
             dlg.configure(bg=C["bg"])
             dlg.grab_set()
 
@@ -1609,6 +1609,13 @@ class App(tk.Tk):
             cw_scale.grid(row=row, column=1, columnspan=2, sticky="w", pady=3)
 
             row += 1
+            tk.Label(frm, text="So luong / batch (1-20):", font=FS, fg=C["text"], bg=C["bg"]).grid(row=row, column=0, sticky="w", pady=3)
+            v_nt = tk.IntVar(value=max(1, min(20, int(s.get("num_threads", 1)))))
+            nt_scale = tk.Scale(frm, from_=1, to=20, resolution=1, orient="horizontal",
+                                variable=v_nt, bg=C["bg"], fg=C["text"], highlightthickness=0, length=200)
+            nt_scale.grid(row=row, column=1, columnspan=2, sticky="w", pady=3)
+
+            row += 1
             # Checkboxes
             chk_frm = tk.Frame(frm, bg=C["bg"])
             chk_frm.grid(row=row, column=0, columnspan=3, sticky="w", pady=8)
@@ -1637,6 +1644,7 @@ class App(tk.Tk):
                     "seed": v_se.get(),
                     "chunk_mode": v_cm.get(),
                     "chunk_words": v_cw.get(),
+                    "num_threads": v_nt.get(),
                     "sample_voice": v_voice.get()
                 }
                 self._write_omnivoice_settings(data, job_id)
@@ -2363,9 +2371,10 @@ class App(tk.Tk):
                 "--postprocess", str(bool(ov_settings["postprocess"])).lower(),
                 "--seed", str(int(ov_settings["seed"])),
                 "--chunk_mode", str(ov_settings["chunk_mode"]),
-                "--chunk_words", str(int(ov_settings.get("chunk_words", 25)))
+                "--chunk_words", str(int(ov_settings.get("chunk_words", 25))),
+                "--num_threads", str(max(1, min(20, int(ov_settings.get("num_threads", 1)))))
             ]
-            self.log(f"Đang chạy OmniVoice CLI (Luồng {job_id}) (steps={ov_settings['num_step']}, gs={ov_settings['guidance_scale']}, speed={ov_settings['speed']})...", "INFO")
+            self.log(f"Đang chạy OmniVoice CLI (Luồng {job_id}) (steps={ov_settings['num_step']}, gs={ov_settings['guidance_scale']}, speed={ov_settings['speed']}, batch={ov_settings.get('num_threads', 1)})...", "INFO")
             
             # Using Popen to stream stdout/stderr
             process = subprocess.Popen(cmd, cwd=omnivoice_dir, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding='utf-8', bufsize=1)

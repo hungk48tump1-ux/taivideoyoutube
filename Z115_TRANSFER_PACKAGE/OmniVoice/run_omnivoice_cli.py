@@ -27,7 +27,7 @@ def load_settings():
         "num_step": 32, "guidance_scale": 2.0, "denoise": True,
         "speed": 1.0, "duration": 0, "preprocess": True,
         "postprocess": True, "seed": -1, "chunk_mode": "Không cắt",
-        "chunk_words": 25, "language": "Tự động"
+        "chunk_words": 25, "num_threads": 1, "language": "Tự động"
     }
     try:
         with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
@@ -153,6 +153,7 @@ def main():
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--chunk_mode", type=str, default=None)
     parser.add_argument("--chunk_words", type=int, default=None)
+    parser.add_argument("--num_threads", type=int, default=None, help="Batch size xử lý text dài, 1-20")
 
     args = parser.parse_args()
 
@@ -169,6 +170,8 @@ def main():
     seed = args.seed if args.seed is not None else int(settings["seed"])
     chunk_mode = args.chunk_mode if args.chunk_mode is not None else settings["chunk_mode"]
     chunk_words = args.chunk_words if args.chunk_words is not None else int(settings.get("chunk_words", 25))
+    num_threads = args.num_threads if args.num_threads is not None else int(settings.get("num_threads", 1))
+    num_threads = max(1, min(20, int(num_threads)))
 
     # --- Đọc văn bản ---
     text = ""
@@ -196,7 +199,7 @@ def main():
     print(f"[*] File text: {args.text_file}")
     print(f"[*] Voice mẫu: {ref_audio}")
     print(f"[*] Lưu tại: {args.output}")
-    print(f"[*] Thông số: num_step={num_step}, guidance={guidance_scale}, speed={speed}, duration={duration}, language={language or 'auto'}, denoise={denoise}, seed={seed}, chunk={chunk_mode}")
+    print(f"[*] Thông số: num_step={num_step}, guidance={guidance_scale}, speed={speed}, duration={duration}, language={language or 'auto'}, denoise={denoise}, seed={seed}, chunk={chunk_mode}, batch={num_threads}")
 
     device = get_best_device()
     print(f"[*] Sử dụng thiết bị: {device}")
@@ -235,35 +238,66 @@ def main():
         current_time = 0.0
         sr = None
 
-        for i, chunk in enumerate(chunks):
-            print(f"[*] Đang tổng hợp phần ({i+1}/{len(chunks)}): {chunk[:50]}...")
-            kw = dict(
-                text=chunk,
-                language=language,
-                generation_config=gen_config,
-                ref_audio=ref_audio
-            )
-            if ref_text:
-                kw["ref_text"] = ref_text
-            if speed != 1.0:
-                kw["speed"] = speed
-            if duration and duration > 0:
-                kw["duration"] = duration
+        i = 0
+        completed = 0
+        initial_batch_size = min(num_threads, len(chunks))
 
-            results = model.generate(**kw)
-            audio_np = results[0] if isinstance(results, list) else results
-            if isinstance(audio_np, torch.Tensor):
-                audio_np = audio_np.cpu().numpy()
-            if audio_np.ndim > 1:
-                audio_np = audio_np.squeeze()
+        while i < len(chunks):
+            current_batch_size = min(initial_batch_size, len(chunks) - i)
+            success = False
 
-            sr = model.sampling_rate
-            all_audio.append(audio_np)
-            chunk_dur = len(audio_np) / sr if sr else 0
-            start_str = format_srt_time(current_time)
-            end_str = format_srt_time(current_time + chunk_dur)
-            srt_entries.append(f"{i+1}\n{start_str} --> {end_str}\n{chunk}\n")
-            current_time += chunk_dur
+            while current_batch_size > 0 and not success:
+                batch_chunks = chunks[i:i + current_batch_size]
+                print(f"[*] Đang tổng hợp lô {completed + 1}-{completed + len(batch_chunks)}/{len(chunks)} (batch={current_batch_size})...")
+
+                kw = dict(
+                    text=batch_chunks if len(batch_chunks) > 1 else batch_chunks[0],
+                    language=language,
+                    generation_config=gen_config,
+                    ref_audio=ref_audio
+                )
+                if ref_text:
+                    kw["ref_text"] = ref_text
+                if speed != 1.0:
+                    kw["speed"] = speed
+                if duration and duration > 0:
+                    kw["duration"] = duration
+
+                try:
+                    results = model.generate(**kw)
+                    if not isinstance(results, list) or (len(batch_chunks) == 1 and results and not isinstance(results[0], (list, tuple, torch.Tensor, np.ndarray))):
+                        results = [results]
+                    if len(results) < len(batch_chunks):
+                        results = results + [results[-1]] * (len(batch_chunks) - len(results))
+
+                    sr = model.sampling_rate
+                    for j, result in enumerate(results[:len(batch_chunks)]):
+                        audio_np = result[0] if isinstance(result, (list, tuple)) else result
+                        if isinstance(audio_np, torch.Tensor):
+                            audio_np = audio_np.cpu().numpy()
+                        if audio_np.ndim > 1:
+                            audio_np = audio_np.squeeze()
+
+                        all_audio.append(audio_np)
+                        chunk_dur = len(audio_np) / sr if sr else 0
+                        start_str = format_srt_time(current_time)
+                        end_str = format_srt_time(current_time + chunk_dur)
+                        srt_entries.append(f"{completed + j + 1}\n{start_str} --> {end_str}\n{batch_chunks[j]}\n")
+                        current_time += chunk_dur
+
+                    completed += len(batch_chunks)
+                    i += len(batch_chunks)
+                    success = True
+
+                except RuntimeError as e:
+                    err = str(e).lower()
+                    if current_batch_size > 1 and ("out of memory" in err or "cuda" in err or "vram" in err):
+                        print(f"[!] Batch {current_batch_size} lỗi VRAM/CUDA, giảm xuống {current_batch_size // 2}...")
+                        if torch.cuda.is_available():
+                            torch.cuda.empty_cache()
+                        current_batch_size = max(1, current_batch_size // 2)
+                        continue
+                    raise
 
         # --- Nối audio ---
         final_audio = np.concatenate(all_audio) if all_audio else np.array([])
