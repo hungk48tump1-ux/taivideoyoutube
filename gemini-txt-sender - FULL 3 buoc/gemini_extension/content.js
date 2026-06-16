@@ -1123,6 +1123,93 @@
     };
   }
 
+  function getChatInputText() {
+    const input = findElement("chat_input");
+    if (!input) return "";
+    return (input.innerText || input.textContent || "").trim();
+  }
+
+  function isVisible(el) {
+    return !!(el && (el.offsetParent !== null || el.getClientRects().length > 0));
+  }
+
+  function isSendButtonReady(btn) {
+    return !!(
+      btn &&
+      isVisible(btn) &&
+      !btn.disabled &&
+      btn.getAttribute("aria-disabled") !== "true"
+    );
+  }
+
+  function submitByKeyboard(input) {
+    input.focus();
+    ["keydown", "keypress", "keyup"].forEach(type => {
+      input.dispatchEvent(new KeyboardEvent(type, {
+        key: "Enter",
+        code: "Enter",
+        bubbles: true,
+        cancelable: true
+      }));
+    });
+  }
+
+  async function waitForSubmitConfirmed(baseline, timeoutMs = 12000) {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      const inputText = getChatInputText();
+      const stopBtn = findElement("stop_button");
+      const spinner = findElement("loading_spinner");
+      const candidate = getResponseCandidateAfterBaseline(baseline);
+
+      if (!inputText) {
+        return "ô nhập đã rỗng";
+      }
+      if (isVisible(stopBtn) || isVisible(spinner)) {
+        return "Gemini đã chuyển sang trạng thái đang sinh";
+      }
+      if (candidate) {
+        return "đã thấy response mới";
+      }
+      await sleep(500);
+    }
+    return "";
+  }
+
+  async function submitPromptAndConfirm(baseline, chunkIndex) {
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      const beforeText = getChatInputText();
+      if (!beforeText) {
+        return "ô nhập đã rỗng trước khi bấm gửi";
+      }
+
+      const sendBtn = findElement("send_button");
+      if (isSendButtonReady(sendBtn)) {
+        addSidebarLog(`Bước 3: Bấm nút gửi lần ${attempt}/3...`, "action");
+        _strongClick(sendBtn);
+      } else {
+        addSidebarLog(`Bước 3: Không thấy nút gửi sẵn sàng, thử Enter lần ${attempt}/3...`, "warning");
+        const input = findElement("chat_input");
+        if (!input) throw new Error("Không tìm thấy ô nhập để gửi bằng Enter.");
+        submitByKeyboard(input);
+      }
+
+      const confirmed = await waitForSubmitConfirmed(baseline, 12000);
+      if (confirmed) {
+        addSidebarLog(`✅ Đã xác nhận Gemini nhận chunk ${chunkIndex}: ${confirmed}.`, "success");
+        return confirmed;
+      }
+
+      const afterText = getChatInputText();
+      addSidebarLog(
+        `⚠️ Chưa xác nhận đã gửi sau lần ${attempt}/3. Ô nhập còn ${afterText.length} ký tự, sẽ thử lại nếu còn lượt.`,
+        "warning"
+      );
+      await sleep(1000);
+    }
+    throw new Error("Chưa xác nhận Gemini đã nhận prompt sau 3 lần bấm gửi; ô nhập vẫn còn nội dung hoặc trang chưa phản hồi.");
+  }
+
   function getLatestResponseText() {
     const containers = getResponseContainers();
     if (containers.length === 0) return "";
@@ -1370,23 +1457,26 @@
     // 3. Click nút gửi
     updateStatus("Đang bấm gửi...", true, `Gửi chunk ${data.chunk_index}`);
     addSidebarLog(`Bước 3: Tìm nút Gửi (Send) và bấm click...`, "action");
-    const sendBtn = findElement("send_button");
-    if (sendBtn && !sendBtn.disabled && sendBtn.offsetParent !== null) {
-      sendBtn.click();
-    } else {
-      addSidebarLog("Sử dụng phím Enter thay thế nút Gửi", "warning");
-      const input = findElement("chat_input");
-      input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+    try {
+      await submitPromptAndConfirm(responseBaseline, data.chunk_index);
+    } catch (e) {
+      addSidebarLog("LỖI gửi prompt: " + e.message, "error");
+      chrome.runtime.sendMessage({ cmd: "restore_tab" });
+      await sendResult({
+        status: "failed_retry",
+        error: e.message,
+        text: "",
+        blocks: []
+      });
+      return;
     }
 
-    // Trả lại tab cũ sau khi đã dán và gửi xong
+    // Trả lại tab cũ sau khi đã xác nhận Gemini nhận prompt
     chrome.runtime.sendMessage({ cmd: "restore_tab" });
-
-    await sleep(2000);
 
     // 4. Đợi phản hồi ổn định
     currentActionText = `Đang đợi phản hồi từ Gemini...`;
-    addSidebarLog("Bước 4: Đã gửi xong! Bắt đầu chờ Gemini sinh chữ...", "warning");
+    addSidebarLog("Bước 4: Đã xác nhận gửi xong. Bắt đầu chờ Gemini sinh chữ...", "warning");
     let responseText = "";
     let responseInfo = null;
     let responseContainer = null;
