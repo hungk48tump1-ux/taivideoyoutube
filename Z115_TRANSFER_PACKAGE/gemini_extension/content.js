@@ -1664,6 +1664,7 @@
     const nodes = uniqueElements(Array.from(document.querySelectorAll(selectors.join(", "))));
     return nodes.filter(el => {
       if (!isVisible(el) || isIgnoredResponseElement(el)) return false;
+      const rect = el.getBoundingClientRect();
       const label = [
         el.getAttribute && el.getAttribute("aria-label"),
         el.getAttribute && el.getAttribute("title"),
@@ -1672,8 +1673,86 @@
       ].filter(Boolean).join(" ").toLowerCase();
 
       if (/download|tải xuống|tai xuong/.test(label)) return false;
-      return /copy|clipboard|sao ch.p|sao chep|content_copy/.test(label);
+      if (/copy|clipboard|sao ch.p|sao chep|content_copy/.test(label)) return true;
+
+      const smallIconButton = rect.width > 10 && rect.width <= 64 && rect.height > 10 && rect.height <= 64;
+      if (!smallIconButton) return false;
+      const codeCard = el.closest("ms-code-block, code-block, bard-code-block, pre, [class*='code'], div");
+      const cardText = codeCard ? (codeCard.innerText || codeCard.textContent || "") : "";
+      return /Plaintext|Đoạn mã|Doan ma|^\s*\[\d{1,3}\]/m.test(cardText);
     });
+  }
+
+  function describeCopyButton(btn, index = 0) {
+    const rect = btn.getBoundingClientRect();
+    const label = [
+      btn.getAttribute && btn.getAttribute("aria-label"),
+      btn.getAttribute && btn.getAttribute("title"),
+      btn.innerText,
+      btn.textContent
+    ].filter(Boolean).join(" ").trim();
+    return {
+      index,
+      tagName: (btn.tagName || "").toLowerCase(),
+      className: getElementClassName(btn),
+      textLength: label.length,
+      lineCount: 0,
+      rectTop: Math.round(rect.top),
+      preview: [label.slice(0, 120)]
+    };
+  }
+
+  function getCopyButtonKey(btn) {
+    const rect = btn.getBoundingClientRect();
+    const label = [
+      btn.getAttribute && btn.getAttribute("aria-label"),
+      btn.getAttribute && btn.getAttribute("title"),
+      btn.innerText,
+      btn.textContent
+    ].filter(Boolean).join(" ").trim().toLowerCase();
+    return [
+      Math.round(rect.top),
+      Math.round(rect.left),
+      Math.round(rect.width),
+      Math.round(rect.height),
+      label,
+      getElementClassName(btn)
+    ].join("|");
+  }
+
+  function getCopyButtonBaseline() {
+    return new Set(getCopyButtonCandidates().map(getCopyButtonKey));
+  }
+
+  function sortCopyButtonsForLatest(buttons, baselineKeys = new Set()) {
+    const scored = buttons.map(btn => ({
+      btn,
+      fresh: baselineKeys && !baselineKeys.has(getCopyButtonKey(btn)),
+      rect: btn.getBoundingClientRect()
+    }));
+    scored.sort((a, b) => {
+      if (a.fresh !== b.fresh) return a.fresh ? -1 : 1;
+      if (a.rect.top !== b.rect.top) return b.rect.top - a.rect.top;
+      return b.rect.left - a.rect.left;
+    });
+    return scored.map(item => item.btn);
+  }
+
+  function filterExactLineBlocks(blocks, expectedLines = null) {
+    if (!expectedLines || expectedLines <= 0) return uniqueTexts(blocks || []);
+    return uniqueTexts((blocks || []).filter(block => getCodeLineArray(block).length === expectedLines));
+  }
+
+  function mergeUniqueCodeBlocks(primaryBlocks, extraBlocks, expectedLines = null, minBlocks = 1) {
+    const merged = [];
+    for (const block of [...(primaryBlocks || []), ...(extraBlocks || [])]) {
+      const normalized = normalizeCodeBlockText(block);
+      if (!normalized) continue;
+      if (expectedLines && getCodeLineArray(normalized).length !== expectedLines) continue;
+      if (!merged.includes(normalized)) merged.push(normalized);
+      if (merged.length >= minBlocks) break;
+    }
+    return merged;
   }
 
   async function readClipboardSafe() {
@@ -1693,22 +1772,27 @@
     } catch (e) {}
   }
 
-  async function getCodeBlocksViaCopyButtons(expectedLines = null, minBlocks = 1, baselineButtonCount = 0) {
+  async function getCodeBlocksViaCopyButtons(expectedLines = null, minBlocks = 1, baselineKeys = new Set()) {
     if (!expectedLines || expectedLines <= 0) return [];
-    const buttons = getCopyButtonCandidates();
-    const newButtons = buttons.slice(Math.max(0, baselineButtonCount));
+    const buttons = sortCopyButtonsForLatest(getCopyButtonCandidates(), baselineKeys).slice(0, 24);
     const originalClipboard = await readClipboardSafe();
     const blocks = [];
+    const attempts = [];
 
-    for (const btn of newButtons) {
+    for (const [index, btn] of buttons.entries()) {
       if (blocks.length >= minBlocks) break;
       try {
         btn.scrollIntoView({ block: "center", inline: "center" });
         await sleep(100);
         btn.click();
-        await sleep(350);
+        await sleep(650);
         const copied = normalizeCodeBlockText(await readClipboardSafe());
         const lineCount = getCodeLineArray(copied).length;
+        const diag = describeCopyButton(btn, index);
+        diag.textLength = copied.length;
+        diag.lineCount = lineCount;
+        diag.preview = [copied.split("\n").slice(0, 2).join(" | ").slice(0, 160)];
+        attempts.push(diag);
         if (lineCount === expectedLines && !blocks.includes(copied)) {
           blocks.push(copied);
         }
@@ -1721,28 +1805,29 @@
 
     lastCodeBlockDiagnostics = {
       responseTextLength: lastCodeBlockDiagnostics ? lastCodeBlockDiagnostics.responseTextLength : 0,
-      candidateCount: newButtons.length,
-      candidates: newButtons.slice(0, 5).map((btn, index) => ({
-        index,
-        tagName: (btn.tagName || "").toLowerCase(),
-        className: getElementClassName(btn),
-        textLength: (btn.innerText || btn.textContent || "").length,
-        lineCount: 0,
-        preview: [(btn.getAttribute && (btn.getAttribute("aria-label") || btn.getAttribute("title"))) || (btn.innerText || btn.textContent || "")]
-      })),
+      candidateCount: buttons.length,
+      candidates: attempts.length > 0 ? attempts : buttons.slice(0, 5).map(describeCopyButton),
       blockCount: blocks.length,
       source: "copy_button"
     };
     return blocks;
   }
 
-  async function getLatestCodeBlocksResolved(container = null, expectedLines = null, minBlocks = 1, baselineButtonCount = 0) {
-    let blocks = getLatestCodeBlocks(container, expectedLines, minBlocks);
+  async function getLatestCodeBlocksResolved(container = null, expectedLines = null, minBlocks = 1, baselineKeys = new Set()) {
+    let blocks = filterExactLineBlocks(getLatestCodeBlocks(container, expectedLines, minBlocks), expectedLines);
     if (blocks.length >= minBlocks) return blocks;
 
-    const copiedBlocks = await getCodeBlocksViaCopyButtons(expectedLines, minBlocks, baselineButtonCount);
-    if (copiedBlocks.length > blocks.length) {
-      return copiedBlocks;
+    const copiedBlocks = await getCodeBlocksViaCopyButtons(expectedLines, minBlocks, baselineKeys);
+    const mergedBlocks = mergeUniqueCodeBlocks(blocks, copiedBlocks, expectedLines, minBlocks);
+    if (mergedBlocks.length > blocks.length) {
+      lastCodeBlockDiagnostics = {
+        responseTextLength: lastCodeBlockDiagnostics ? lastCodeBlockDiagnostics.responseTextLength : 0,
+        candidateCount: lastCodeBlockDiagnostics ? lastCodeBlockDiagnostics.candidateCount : copiedBlocks.length,
+        candidates: lastCodeBlockDiagnostics ? lastCodeBlockDiagnostics.candidates : [],
+        blockCount: mergedBlocks.length,
+        source: "copy_button_merge"
+      };
+      return mergedBlocks;
     }
     return blocks;
   }
@@ -1972,7 +2057,7 @@
     await ensureModel("Pro");
 
     const responseBaseline = getLatestResponseSnapshot();
-    const codeCopyButtonBaseline = getCopyButtonCandidates().length;
+    const codeCopyButtonBaseline = getCopyButtonBaseline();
 
     // 3. Click nút gửi
     updateStatus("Đang bấm gửi...", true, `Gửi chunk ${data.chunk_index}`);
