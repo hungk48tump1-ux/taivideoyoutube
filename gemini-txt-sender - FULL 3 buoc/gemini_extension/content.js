@@ -1285,16 +1285,17 @@
 
   const CODE_BLOCK_SELECTOR = [
     "pre",
+    "code",
     "code-block",
     "ms-code-block",
     "bard-code-block",
-    "div[class*='code-block']",
-    "div[class*='CodeBlock']",
-    "div[class*='codeBlock']",
-    "[class*='code-container']",
-    "[class*='codeContainer']",
-    "[data-test-id*='code']"
+    "[class*='code']",
+    "[class*='Code']",
+    "[data-test-id*='code']",
+    "[aria-label*='code' i]"
   ].join(", ");
+
+  let lastCodeBlockDiagnostics = null;
 
   function readElementTextDeep(el) {
     if (!el) return "";
@@ -1327,16 +1328,20 @@
   function normalizeCodeBlockText(raw) {
     let txt = (raw || "").replace(/\r\n/g, "\n").replace(/\u00a0/g, " ");
     let lines = txt.split("\n").map(line => line.trimEnd());
-    const headerPattern = /^(Plaintext|Text|Python|Javascript|JavaScript|TypeScript|HTML|CSS|JSON|Markdown|C\+\+|Java|Copy code|Copy|Sao ch.p m.|Sao chep ma|Wrap|M. r.ng)$/i;
+    const uiLinePattern = /^(Plaintext|Text|Python|Javascript|JavaScript|TypeScript|HTML|CSS|JSON|Markdown|C\+\+|Java|Copy code|Copy|Sao ch.p m.|Sao chep ma|Tải xuống|Download|Wrap|M. r.ng)$/i;
 
-    while (lines.length && (!lines[0].trim() || headerPattern.test(lines[0].trim()))) {
+    while (lines.length && (!lines[0].trim() || uiLinePattern.test(lines[0].trim()))) {
       lines.shift();
     }
-    while (lines.length && (!lines[lines.length - 1].trim() || headerPattern.test(lines[lines.length - 1].trim()))) {
+    while (lines.length && (!lines[lines.length - 1].trim() || uiLinePattern.test(lines[lines.length - 1].trim()))) {
       lines.pop();
     }
 
-    return lines.join("\n").trim();
+    return lines.filter(line => !uiLinePattern.test(line.trim())).join("\n").trim();
+  }
+
+  function getCodeLineArray(text) {
+    return (text || "").split("\n").filter(line => line.trim().length > 0);
   }
 
   function isLikelyCodeBlockText(text) {
@@ -1358,80 +1363,6 @@
     return blocks;
   }
 
-  function looksLikeGeneratedLine(line) {
-    const s = (line || "").trim();
-    return /^(\[\d+\]|\(\d+\)|\d+[.)])\s+/.test(s);
-  }
-
-  function looksLikeSquareGeneratedLine(line) {
-    const s = (line || "").trim();
-    return /^\[\d+\]\s+/.test(s);
-  }
-
-  function splitLinesByExpected(lines, expectedLines = null, minBlocks = 1) {
-    if (!expectedLines || expectedLines <= 0) {
-      return [lines.join("\n").trim()].filter(Boolean);
-    }
-
-    const blocks = [];
-    for (let i = 0; i + expectedLines <= lines.length; i += expectedLines) {
-      const part = lines.slice(i, i + expectedLines).join("\n").trim();
-      if (part) blocks.push(part);
-      if (blocks.length >= minBlocks && lines.length - (i + expectedLines) < expectedLines) {
-        break;
-      }
-    }
-
-    if (blocks.length === 0 && lines.length > 0) {
-      blocks.push(lines.join("\n").trim());
-    }
-    return blocks;
-  }
-
-  function parseLineRunCodeBlocks(text, expectedLines = null, minBlocks = 1) {
-    const rawLines = (text || "")
-      .replace(/\r\n/g, "\n")
-      .split("\n")
-      .map(line => line.trim())
-      .filter(Boolean);
-
-    const squareGroups = [];
-    const looseGroups = [];
-    let current = [];
-    let currentIsSquare = false;
-
-    for (const line of rawLines) {
-      if (looksLikeGeneratedLine(line)) {
-        const isSquare = looksLikeSquareGeneratedLine(line);
-        if (current.length > 0 && currentIsSquare !== isSquare) {
-          (currentIsSquare ? squareGroups : looseGroups).push(current);
-          current = [];
-        }
-        currentIsSquare = isSquare;
-        current.push(line);
-      } else if (current.length > 0) {
-        (currentIsSquare ? squareGroups : looseGroups).push(current);
-        current = [];
-      }
-    }
-    if (current.length > 0) {
-      (currentIsSquare ? squareGroups : looseGroups).push(current);
-    }
-
-    const groups = squareGroups.length > 0 ? squareGroups : looseGroups;
-    let blocks = [];
-    for (const group of groups) {
-      if (expectedLines && group.length >= expectedLines) {
-        blocks = blocks.concat(splitLinesByExpected(group, expectedLines, minBlocks - blocks.length));
-      } else if (group.length >= 2) {
-        blocks.push(group.join("\n").trim());
-      }
-      if (blocks.length >= minBlocks) break;
-    }
-
-    return blocks.filter(Boolean);
-  }
-
   function uniqueTexts(blocks) {
     const seen = new Set();
     return blocks.filter(text => {
@@ -1440,6 +1371,41 @@
       seen.add(key);
       return true;
     });
+  }
+
+  function getElementClassName(el) {
+    if (!el) return "";
+    const cls = typeof el.className === "string" ? el.className : (el.getAttribute && el.getAttribute("class")) || "";
+    return cls.replace(/\s+/g, " ").trim().slice(0, 160);
+  }
+
+  function hasPlaintextHeader(el) {
+    if (!el) return false;
+    const text = readElementTextDeep(el).trimStart();
+    return /^Plaintext(\n|\r|\s{2,})/i.test(text);
+  }
+
+  function isDomCodeBlockCandidate(el) {
+    if (!el || isIgnoredResponseElement(el)) return false;
+    const text = readElementTextDeep(el).trim();
+    if (!text) return false;
+
+    const tag = (el.tagName || "").toLowerCase();
+    const className = getElementClassName(el).toLowerCase();
+    const role = (el.getAttribute && (el.getAttribute("role") || "")).toLowerCase();
+    const aria = (el.getAttribute && (el.getAttribute("aria-label") || "")).toLowerCase();
+    const hasCodeShape = (
+      tag === "pre" ||
+      tag === "code" ||
+      tag.includes("code") ||
+      className.includes("code") ||
+      role.includes("code") ||
+      aria.includes("code") ||
+      hasPlaintextHeader(el)
+    );
+
+    if (!hasCodeShape) return false;
+    return getCodeLineArray(normalizeCodeBlockText(text)).length > 0;
   }
 
   function getResponseScopes(container) {
@@ -1467,54 +1433,57 @@
     return uniqueElements(scopes);
   }
 
-  function extractCodeBlocksFromScope(scope, expectedLines = null, minBlocks = 1) {
-    const elements = collectCodeBlockElements(scope);
+  function collectDomCodeBlockCandidates(scope) {
+    const elements = [];
+    if (!scope) return elements;
 
-    const validElements = elements.filter(b1 => {
+    collectCodeBlockElements(scope).forEach(el => elements.push(el));
+    if (scope.querySelectorAll) {
+      scope.querySelectorAll("*").forEach(el => {
+        if (hasPlaintextHeader(el)) elements.push(el);
+      });
+    }
+    if (isDomCodeBlockCandidate(scope)) elements.push(scope);
+
+    const unique = uniqueElements(elements).filter(isDomCodeBlockCandidate);
+    return unique.filter(b1 => {
+      const b1Lines = getCodeLineArray(normalizeCodeBlockText(readElementTextDeep(b1))).length;
       for (let b2 of elements) {
-        if (b1 !== b2 && b1.contains(b2)) return false;
+        if (b1 === b2 || !b1.contains(b2) || !isDomCodeBlockCandidate(b2)) continue;
+        const b2Lines = getCodeLineArray(normalizeCodeBlockText(readElementTextDeep(b2))).length;
+        if (b2Lines >= Math.max(1, Math.floor(b1Lines * 0.8))) return false;
       }
       return true;
     });
-
-    let blocks = validElements
-      .map(readElementTextDeep)
-      .map(normalizeCodeBlockText)
-      .filter(isLikelyCodeBlockText);
-
-    const scopeText = readResponseText(scope);
-    if (blocks.length < minBlocks) {
-      blocks = blocks.concat(parseFencedCodeBlocks(scopeText));
-    }
-    if (blocks.length < minBlocks) {
-      blocks = blocks.concat(parseLineRunCodeBlocks(scopeText, expectedLines, minBlocks));
-    }
-
-    return uniqueTexts(blocks);
   }
 
-  function getDocumentTextFallbackCodeBlocks(expectedLines = null, minBlocks = 1) {
-    const scopes = [];
-    getResponseContainers().forEach(el => scopes.push(el));
-    document.querySelectorAll("model-message, message-content, main").forEach(el => scopes.push(el));
-    if (document.body) scopes.push(document.body);
+  function describeCodeBlockCandidate(el, index) {
+    const text = normalizeCodeBlockText(readElementTextDeep(el));
+    const lines = getCodeLineArray(text);
+    return {
+      index,
+      tagName: (el.tagName || "").toLowerCase(),
+      className: getElementClassName(el),
+      textLength: text.length,
+      lineCount: lines.length,
+      preview: lines.slice(0, 3)
+    };
+  }
 
-    let bestBlocks = [];
-    const orderedScopes = uniqueElements(scopes).reverse();
-    for (const scope of orderedScopes) {
-      if (isIgnoredResponseElement(scope)) continue;
-      const text = readResponseText(scope);
-      const blocks = uniqueTexts(
-        parseFencedCodeBlocks(text).concat(parseLineRunCodeBlocks(text, expectedLines, minBlocks))
-      );
-      if (blocks.length >= minBlocks) {
-        return blocks.slice(-minBlocks);
-      }
-      if (blocks.length > bestBlocks.length) {
-        bestBlocks = blocks;
-      }
-    }
-    return bestBlocks;
+  function extractCodeBlocksFromScope(scope, expectedLines = null, minBlocks = 1) {
+    const candidates = collectDomCodeBlockCandidates(scope);
+    const blocks = uniqueTexts(
+      candidates
+        .map(readElementTextDeep)
+        .map(normalizeCodeBlockText)
+        .filter(isLikelyCodeBlockText)
+    );
+
+    return {
+      blocks,
+      candidates,
+      candidateDiagnostics: candidates.map(describeCodeBlockCandidate)
+    };
   }
 
   function getLatestCodeBlocks(container = null, expectedLines = null, minBlocks = 1) {
@@ -1525,24 +1494,56 @@
     }
 
     let bestBlocks = [];
+    let bestCandidates = [];
+    let bestCandidateDiagnostics = [];
     for (const scope of getResponseScopes(container)) {
-      const blocks = extractCodeBlocksFromScope(scope, expectedLines, minBlocks);
+      const extracted = extractCodeBlocksFromScope(scope, expectedLines, minBlocks);
+      const blocks = extracted.blocks;
       if (blocks.length >= minBlocks) {
+        lastCodeBlockDiagnostics = {
+          responseTextLength: readResponseText(container).length,
+          candidateCount: extracted.candidates.length,
+          candidates: extracted.candidateDiagnostics,
+          blockCount: blocks.length,
+          source: "dom"
+        };
         return blocks;
       }
       if (blocks.length > bestBlocks.length) {
         bestBlocks = blocks;
+        bestCandidates = extracted.candidates;
+        bestCandidateDiagnostics = extracted.candidateDiagnostics;
       }
     }
 
-    if (bestBlocks.length < minBlocks) {
-      const fallbackBlocks = getDocumentTextFallbackCodeBlocks(expectedLines, minBlocks);
-      if (fallbackBlocks.length >= minBlocks || fallbackBlocks.length > bestBlocks.length) {
-        return fallbackBlocks;
-      }
-    }
+    lastCodeBlockDiagnostics = {
+      responseTextLength: readResponseText(container).length,
+      candidateCount: bestCandidates.length,
+      candidates: bestCandidateDiagnostics,
+      blockCount: bestBlocks.length,
+      source: bestCandidates.length > 0 ? "dom_partial" : "dom_none"
+    };
 
     return bestBlocks;
+  }
+
+  function logCodeBlockDiagnostics(label = "Codeblock DOM", responseInfo = null) {
+    const diag = lastCodeBlockDiagnostics;
+    if (!diag) {
+      addSidebarLog(`${label}: chưa có dữ liệu chẩn đoán codeblock.`, "warning");
+      return;
+    }
+    const responsePart = responseInfo ? `response_index=${responseInfo.index + 1}/${responseInfo.count}, ` : "";
+    addSidebarLog(
+      `${label}: ${responsePart}response_text=${diag.responseTextLength}, candidates=${diag.candidateCount}, blocks=${diag.blockCount}, source=${diag.source}`,
+      diag.blockCount > 0 ? "info" : "warning"
+    );
+    diag.candidates.slice(0, 5).forEach(c => {
+      addSidebarLog(
+        `  candidate #${c.index + 1}: <${c.tagName}> class="${c.className}" text=${c.textLength}, lines=${c.lineCount}, first="${c.preview.join(" | ").slice(0, 180)}"`,
+        "info"
+      );
+    });
   }
 
   function getCodeLinesCount(blocks, blockIndex = 0) {
@@ -1826,6 +1827,7 @@
     // Kiểm tra xem đã đủ số lượng block tối thiểu chưa (Chunk 1 cần 2 blocks, các chunk sau cần 1 block)
     const minRequiredBlocks = (data.chunk_index === 1) ? 2 : 1;
     let finalBlocks = getLatestCodeBlocks(responseContainer, data.expected_lines, minRequiredBlocks);
+    logCodeBlockDiagnostics(`Quét codeblock DOM lần đầu cho chunk ${data.chunk_index}`, responseInfo);
     
     if (finalBlocks.length < minRequiredBlocks && data.expected_lines !== null) {
       addSidebarLog(`⏳ Chưa đủ ${minRequiredBlocks} code blocks (hiện có: ${finalBlocks.length}), chờ tối đa 450s...`, "warning");
@@ -1837,6 +1839,7 @@
         await sleep(30000);
         elapsed += 30;
         finalBlocks = getLatestCodeBlocks(responseContainer, data.expected_lines, minRequiredBlocks);
+        logCodeBlockDiagnostics(`Quét codeblock DOM sau ${elapsed}s cho chunk ${data.chunk_index}`, responseInfo);
         
         // Đặc thù Chunk 1: đã có 1 block ổn định -> chờ tiếp block thứ 2 thêm 450s theo cấu hình hiện tại
         if (data.chunk_index === 1 && finalBlocks.length === 1) {
@@ -1903,10 +1906,15 @@
       
       if (!found) {
         const actualLines = getCodeLinesCount(finalBlocks, 0);
+        logCodeBlockDiagnostics(`Lỗi codeblock DOM chunk ${data.chunk_index}`, responseInfo);
+        const diag = lastCodeBlockDiagnostics;
+        const domReason = diag && diag.candidateCount > 0
+          ? `Tìm thấy ${diag.candidateCount} khung codeblock DOM nhưng chưa đủ ${minRequiredBlocks} block hợp lệ.`
+          : `Không tìm thấy khung codeblock DOM trong response mới.`;
         addSidebarLog(`❌ Hết thời gian vẫn không đủ ${minRequiredBlocks} code blocks. Chunk ${data.chunk_index}, expected=${data.expected_lines}, actual=${actualLines}, blocks=${finalBlocks.length}. Reload & gửi lại.`, "error");
         await sendResult({
           status: "failed_retry",
-          error: `Chunk ${data.chunk_index}: không đủ code block. Yêu cầu ${minRequiredBlocks} block, nhận ${finalBlocks.length} block. Expected lines=${data.expected_lines}, actual first block=${actualLines}.`,
+          error: `Chunk ${data.chunk_index}: ${domReason} Yêu cầu ${minRequiredBlocks} block, nhận ${finalBlocks.length} block. Expected lines=${data.expected_lines}, actual first block=${actualLines}.`,
           text: responseText,
           blocks: finalBlocks
         });
@@ -1952,6 +1960,7 @@
         if (failMsg) {
           currentActionText = `Lỗi số dòng! Báo cáo Python và tự động tải lại trang...`;
           addSidebarLog(`LỖI: ${failMsg}`, "error");
+          logCodeBlockDiagnostics("Chi tiết DOM khi Chunk 1 sai dòng", responseInfo);
           await sendResult({
             status: "failed_retry",
             error: `Chunk 1: ${failMsg.trim()} Expected lines=${data.expected_lines}, blocks_found=${finalBlocks.length}.`,
@@ -1975,6 +1984,7 @@
         if (linesBlock1 !== data.expected_lines) {
           currentActionText = `Lỗi số dòng! Báo cáo Python và tự động tải lại trang...`;
           addSidebarLog(`LỖI: Sai lệch dòng! Yêu cầu: ${data.expected_lines}, Thực tế: ${linesBlock1}`, "error");
+          logCodeBlockDiagnostics(`Chi tiết DOM khi chunk ${data.chunk_index} sai dòng`, responseInfo);
           await sendResult({
             status: "failed_retry",
             error: `Chunk ${data.chunk_index}: Số dòng không khớp ở code block đầu tiên! Yêu cầu: ${data.expected_lines}, Thực tế: ${linesBlock1}, blocks_found=${finalBlocks.length}.`,
