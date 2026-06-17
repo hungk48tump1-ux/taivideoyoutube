@@ -1283,6 +1283,81 @@
     return readResponseText(containers[containers.length - 1]);
   }
 
+  const CODE_BLOCK_SELECTOR = [
+    "pre",
+    "code-block",
+    "ms-code-block",
+    "bard-code-block",
+    "div[class*='code-block']",
+    "div[class*='CodeBlock']",
+    "div[class*='codeBlock']",
+    "[class*='code-container']",
+    "[class*='codeContainer']",
+    "[data-test-id*='code']"
+  ].join(", ");
+
+  function readElementTextDeep(el) {
+    if (!el) return "";
+    let text = el.innerText || el.textContent || "";
+    if (el.shadowRoot) {
+      text += "\n" + (el.shadowRoot.innerText || el.shadowRoot.textContent || "");
+    }
+    return text;
+  }
+
+  function collectCodeBlockElements(root, out = []) {
+    if (!root) return out;
+
+    if (root.matches && root.matches(CODE_BLOCK_SELECTOR)) {
+      out.push(root);
+    }
+
+    if (root.querySelectorAll) {
+      root.querySelectorAll(CODE_BLOCK_SELECTOR).forEach(el => out.push(el));
+      root.querySelectorAll("*").forEach(el => {
+        if (el.shadowRoot) {
+          collectCodeBlockElements(el.shadowRoot, out);
+        }
+      });
+    }
+
+    return uniqueElements(out);
+  }
+
+  function normalizeCodeBlockText(raw) {
+    let txt = (raw || "").replace(/\r\n/g, "\n").replace(/\u00a0/g, " ");
+    let lines = txt.split("\n").map(line => line.trimEnd());
+    const headerPattern = /^(Plaintext|Text|Python|Javascript|JavaScript|TypeScript|HTML|CSS|JSON|Markdown|C\+\+|Java|Copy code|Copy|Sao ch.p m.|Sao chep ma|Wrap|M. r.ng)$/i;
+
+    while (lines.length && (!lines[0].trim() || headerPattern.test(lines[0].trim()))) {
+      lines.shift();
+    }
+    while (lines.length && (!lines[lines.length - 1].trim() || headerPattern.test(lines[lines.length - 1].trim()))) {
+      lines.pop();
+    }
+
+    return lines.join("\n").trim();
+  }
+
+  function isLikelyCodeBlockText(text) {
+    const nonEmptyLines = (text || "").split("\n").filter(line => line.trim().length > 0);
+    if (nonEmptyLines.length >= 2) return true;
+    return (text || "").trim().length >= 80;
+  }
+
+  function parseFencedCodeBlocks(text) {
+    const blocks = [];
+    const regex = /```[^\n`]*\n([\s\S]*?)```/g;
+    let match;
+    while ((match = regex.exec(text || "")) !== null) {
+      const block = normalizeCodeBlockText(match[1]);
+      if (isLikelyCodeBlockText(block)) {
+        blocks.push(block);
+      }
+    }
+    return blocks;
+  }
+
   function getLatestCodeBlocks(container = null) {
     if (!container) {
       const containers = getResponseContainers();
@@ -1290,26 +1365,30 @@
       container = containers[containers.length - 1];
     }
 
-    let blocks = [];
-    if (container.matches && container.matches('pre, code-block')) {
-      blocks.push(container);
-    }
-    blocks = blocks.concat(Array.from(container.querySelectorAll('pre')));
-    if (blocks.length === 0) {
-      blocks = blocks.concat(Array.from(container.querySelectorAll('code-block')));
-    }
+    const elements = collectCodeBlockElements(container);
 
-    let validBlocks = blocks.filter(b1 => {
-      for (let b2 of blocks) {
+    const validElements = elements.filter(b1 => {
+      for (let b2 of elements) {
         if (b1 !== b2 && b1.contains(b2)) return false; 
       }
       return true;
     });
 
-    return validBlocks.map(b => {
-      let txt = b.innerText || b.textContent || "";
-      txt = txt.replace(/^(Plaintext|Python|Javascript|HTML|C\+\+|Java|Copy code|Sao chép mã|\n)+/i, "");
-      return txt.trim();
+    let blocks = validElements
+      .map(readElementTextDeep)
+      .map(normalizeCodeBlockText)
+      .filter(isLikelyCodeBlockText);
+
+    if (blocks.length === 0) {
+      blocks = parseFencedCodeBlocks(readResponseText(container));
+    }
+
+    const seen = new Set();
+    return blocks.filter(text => {
+      const key = text.replace(/\s+/g, " ").slice(0, 500);
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
     });
   }
 
