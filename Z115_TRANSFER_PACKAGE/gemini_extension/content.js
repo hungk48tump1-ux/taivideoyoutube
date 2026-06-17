@@ -1506,6 +1506,19 @@
     };
   }
 
+  function splitTextIntoLineCountBlocks(text, expectedLines = null, minBlocks = 1) {
+    if (!expectedLines || expectedLines <= 0) return [];
+    const normalized = normalizeCodeBlockText(text);
+    const lines = getCodeLineArray(normalized);
+    if (lines.length < expectedLines) return [];
+
+    const blocks = [];
+    for (let i = 0; i + expectedLines <= lines.length && blocks.length < minBlocks; i += expectedLines) {
+      blocks.push(lines.slice(i, i + expectedLines).join("\n"));
+    }
+    return blocks;
+  }
+
   function getGlobalCodeBlockScopes() {
     const scopes = [];
     document.querySelectorAll("model-message, message-content, .model-response-text, article, section, main").forEach(el => {
@@ -1565,6 +1578,20 @@
           bestCandidates = extracted.candidates;
           bestCandidateDiagnostics = extracted.candidateDiagnostics;
         }
+      }
+    }
+
+    if (bestBlocks.length < minBlocks) {
+      const textBlocks = splitTextIntoLineCountBlocks(readResponseText(container), expectedLines, minBlocks);
+      if (textBlocks.length > bestBlocks.length) {
+        lastCodeBlockDiagnostics = {
+          responseTextLength: readResponseText(container).length,
+          candidateCount: bestCandidates.length,
+          candidates: bestCandidateDiagnostics,
+          blockCount: textBlocks.length,
+          source: "response_text_line_count"
+        };
+        return textBlocks;
       }
     }
 
