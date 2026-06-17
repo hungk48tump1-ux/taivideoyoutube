@@ -266,7 +266,8 @@
     footer.style.cssText = "font-size: 11px; text-align: center; color: #8286a6; padding-top: 4px; font-style: italic;";
     
     if (activeJob) {
-      footer.innerText = `Đang lắng nghe: ${activeJob === "file1" ? "LUỒNG FILE 1" : "LUỒNG FILE 2"}`;
+      const jobLabel = activeJob === "file1" ? "LUỒNG FILE 1" : (activeJob === "file2" ? "LUỒNG FILE 2" : "AUTO");
+      footer.innerText = `Đang lắng nghe: ${jobLabel}`;
       footer.style.color = "#4d88ff";
       footer.style.fontWeight = "bold";
     } else {
@@ -522,6 +523,7 @@
       "model-message message-content",
       "model-message .message-content",
       ".model-response-text",
+      "message-content",
       "model-message"
     ],
     regenerate_button: [
@@ -1075,13 +1077,78 @@
     await sleep(500);
   }
 
-  function getResponseContainers() {
-    return findAllElements("response_container");
-  }
-
   function readResponseText(container) {
     if (!container) return "";
     return container.innerText || container.textContent || "";
+  }
+
+  function uniqueElements(elements) {
+    const seen = new Set();
+    const out = [];
+    for (const el of elements) {
+      if (!el || seen.has(el)) continue;
+      seen.add(el);
+      out.push(el);
+    }
+    return out;
+  }
+
+  function isIgnoredResponseElement(el) {
+    if (!el || !isVisible(el)) return true;
+    if (el.closest("#z115-panel")) return true;
+    if (el.closest("rich-textarea, textarea, input, [contenteditable='true']")) return true;
+    if (el.closest("nav, aside, header, footer")) return true;
+    const tag = (el.tagName || "").toLowerCase();
+    if (["button", "nav", "aside", "header", "footer", "script", "style"].includes(tag)) return true;
+    return false;
+  }
+
+  function getFallbackResponseContainers() {
+    const candidates = Array.from(document.querySelectorAll(
+      "model-message, message-content, article, section, main div, div"
+    )).filter(el => {
+      if (isIgnoredResponseElement(el)) return false;
+      const text = readResponseText(el).trim();
+      const hasCode = !!el.querySelector("pre, code-block, code");
+      return hasCode || text.length >= 160;
+    });
+
+    const deepCandidates = candidates.filter(el => {
+      const textLength = readResponseText(el).trim().length;
+      return !candidates.some(other => {
+        if (other === el || !el.contains(other)) return false;
+        const otherTextLength = readResponseText(other).trim().length;
+        return other.querySelector("pre, code-block, code") || otherTextLength >= textLength * 0.55;
+      });
+    });
+
+    return uniqueElements(deepCandidates).sort((a, b) => {
+      const ar = a.getBoundingClientRect();
+      const br = b.getBoundingClientRect();
+      return (ar.top - br.top) || (ar.left - br.left);
+    });
+  }
+
+  function getResponseContainers() {
+    const direct = uniqueElements(findAllElements("response_container"))
+      .filter(el => !isIgnoredResponseElement(el) && readResponseText(el).trim().length > 0);
+    const fallback = getFallbackResponseContainers();
+    return direct.length > 0 ? direct : fallback;
+  }
+
+  function getResponseDiagnostics() {
+    const direct = uniqueElements(findAllElements("response_container"))
+      .filter(el => !isIgnoredResponseElement(el) && readResponseText(el).trim().length > 0);
+    const fallback = getFallbackResponseContainers();
+    const active = direct.length > 0 ? direct : fallback;
+    const latest = active.length ? active[active.length - 1] : null;
+    return {
+      directCount: direct.length,
+      fallbackCount: fallback.length,
+      activeCount: active.length,
+      latestTextLength: latest ? readResponseText(latest).trim().length : 0,
+      latestCodeBlocks: latest ? getLatestCodeBlocks(latest).length : 0
+    };
   }
 
   function getLatestResponseSnapshot() {
@@ -1100,7 +1167,7 @@
     let index = -1;
 
     if (containers.length > base.count) {
-      index = base.count;
+      index = containers.length - 1;
       container = containers[index];
     } else if (containers.length > 0) {
       const latest = containers[containers.length - 1];
@@ -1223,9 +1290,13 @@
       container = containers[containers.length - 1];
     }
 
-    let blocks = Array.from(container.querySelectorAll('pre'));
+    let blocks = [];
+    if (container.matches && container.matches('pre, code-block')) {
+      blocks.push(container);
+    }
+    blocks = blocks.concat(Array.from(container.querySelectorAll('pre')));
     if (blocks.length === 0) {
-      blocks = Array.from(container.querySelectorAll('code-block'));
+      blocks = blocks.concat(Array.from(container.querySelectorAll('code-block')));
     }
 
     let validBlocks = blocks.filter(b1 => {
@@ -1340,10 +1411,14 @@
     setTimeout(pollLoop, 1000);
   }
 
-  async function waitForResponse(timeoutSec = 900, baseline = null) {
+  async function waitForResponse(timeoutSec = 840, baseline = null) {
     const deadline = Date.now() + timeoutSec * 1000;
     const base = baseline || getLatestResponseSnapshot();
-    addSidebarLog(`Mốc response trước gửi: count=${base.count}, text=${base.text.length} ký tự`, "info");
+    let diag = getResponseDiagnostics();
+    addSidebarLog(
+      `Mốc response trước gửi: count=${base.count}, text=${base.text.length} ký tự | direct=${diag.directCount}, fallback=${diag.fallbackCount}, latest=${diag.latestTextLength} ký tự, blocks=${diag.latestCodeBlocks}`,
+      "info"
+    );
     
     const startWaitDeadline = Date.now() + 15000;
     
@@ -1364,6 +1439,7 @@
     let lastText = "";
     let stableSince = null;
     const stableWaitMs = 15000;
+    let lastDiagLog = 0;
     
     while (Date.now() < deadline) {
       const stopBtn = findElement("stop_button");
@@ -1379,7 +1455,15 @@
       const currentText = candidate ? candidate.text : "";
       
       if (!candidate) {
-        updateStatus("Đang chờ response mới...", true, `Response: ${getResponseContainers().length}/${base.count}`);
+        diag = getResponseDiagnostics();
+        updateStatus("Đang chờ response mới...", true, `Response: ${diag.activeCount}/${base.count}`);
+        if (Date.now() - lastDiagLog >= 30000) {
+          addSidebarLog(
+            `🔎 Chẩn đoán response: direct=${diag.directCount}, fallback=${diag.fallbackCount}, active=${diag.activeCount}, latest=${diag.latestTextLength} ký tự, blocks=${diag.latestCodeBlocks}`,
+            "info"
+          );
+          lastDiagLog = Date.now();
+        }
         stableSince = null;
         lastText = "";
       } else if (!isBusy) {
@@ -1403,7 +1487,8 @@
       }
       await sleep(500);
     }
-    throw new Error(`Không thấy response mới sau khi gửi chunk (baseline count=${base.count}, current count=${getResponseContainers().length}).`);
+    diag = getResponseDiagnostics();
+    throw new Error(`Không thấy response mới sau ${timeoutSec}s (baseline count=${base.count}, current=${diag.activeCount}, direct=${diag.directCount}, fallback=${diag.fallbackCount}, latest=${diag.latestTextLength} ký tự, blocks=${diag.latestCodeBlocks}).`);
   }
 
   async function handleSendChunk(data) {
@@ -1481,7 +1566,7 @@
     let responseInfo = null;
     let responseContainer = null;
     try {
-      responseInfo = await waitForResponse(900, responseBaseline);
+      responseInfo = await waitForResponse(840, responseBaseline);
       responseText = responseInfo.text;
       responseContainer = responseInfo.container;
     } catch (e) {
@@ -1586,12 +1671,13 @@
       }
       
       if (!found) {
-        addSidebarLog(`❌ Hết thời gian vẫn không đủ ${minRequiredBlocks} code blocks. Reload & gửi lại.`, "error");
+        const actualLines = getCodeLinesCount(finalBlocks, 0);
+        addSidebarLog(`❌ Hết thời gian vẫn không đủ ${minRequiredBlocks} code blocks. Chunk ${data.chunk_index}, expected=${data.expected_lines}, actual=${actualLines}, blocks=${finalBlocks.length}. Reload & gửi lại.`, "error");
         await sendResult({
           status: "failed_retry",
-          error: `Hết thời gian chờ vẫn không xuất hiện đủ ${minRequiredBlocks} code blocks!`,
+          error: `Chunk ${data.chunk_index}: không đủ code block. Yêu cầu ${minRequiredBlocks} block, nhận ${finalBlocks.length} block. Expected lines=${data.expected_lines}, actual first block=${actualLines}.`,
           text: responseText,
-          blocks: []
+          blocks: finalBlocks
         });
         
         setTimeout(async () => {
@@ -1637,7 +1723,7 @@
           addSidebarLog(`LỖI: ${failMsg}`, "error");
           await sendResult({
             status: "failed_retry",
-            error: failMsg.trim(),
+            error: `Chunk 1: ${failMsg.trim()} Expected lines=${data.expected_lines}, blocks_found=${finalBlocks.length}.`,
             text: responseText,
             blocks: finalBlocks
           });
@@ -1660,7 +1746,7 @@
           addSidebarLog(`LỖI: Sai lệch dòng! Yêu cầu: ${data.expected_lines}, Thực tế: ${linesBlock1}`, "error");
           await sendResult({
             status: "failed_retry",
-            error: `Số dòng không khớp! Yêu cầu: ${data.expected_lines}, Thực tế: ${linesBlock1}`,
+            error: `Chunk ${data.chunk_index}: Số dòng không khớp ở code block đầu tiên! Yêu cầu: ${data.expected_lines}, Thực tế: ${linesBlock1}, blocks_found=${finalBlocks.length}.`,
             text: responseText,
             blocks: finalBlocks
           });

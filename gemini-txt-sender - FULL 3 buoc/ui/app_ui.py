@@ -630,12 +630,13 @@ class App(tk.Tk):
             "initial_url": initial_url
         }
         
-        # Chờ Extension lấy chunk, thực thi và trả kết quả về (Timeout 15 phút)
-        completed = job["event"].wait(timeout=900)
+        # Chờ Extension lấy chunk, thực thi và trả kết quả về.
+        # Addon tự timeout response ở 840s; Python chờ 960s để nhận lỗi thật từ addon trước.
+        completed = job["event"].wait(timeout=960)
         job["pending_chunk"] = None  # Xóa sạch hàng đợi khi đã hoàn tất xử lý
         
         if not completed:
-            return False, {"text": "Hết thời gian chờ phản hồi từ Extension (Timeout 15 phút)!", "blocks": [], "retry": False}
+            return False, {"text": "Hết thời gian chờ phản hồi từ Extension (Timeout 16 phút)!", "blocks": [], "retry": False}
             
         res = job["result"]
         if not res:
@@ -2763,7 +2764,7 @@ class App(tk.Tk):
 
         # ── Vòng lặp gửi chunk (ADDON STYLE: reload & resend khi sai số dòng) ──
         model   = str(settings["model"]).strip() or "Pro"
-        tout    = 900  # Timeout 900s giống addon
+        tout    = 960  # Python chờ lâu hơn addon để nhận failed_retry chi tiết
         max_chunk_retries = 6
         all_chunks_ok = True
         job_context = getattr(self._job_log_context, "job_name", None)
