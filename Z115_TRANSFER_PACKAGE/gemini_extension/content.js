@@ -1385,6 +1385,22 @@
     return /^Plaintext(\n|\r|\s{2,})/i.test(text);
   }
 
+  function hasCodeVisualStyle(el) {
+    if (!el || !window.getComputedStyle) return false;
+    const style = window.getComputedStyle(el);
+    const font = (style.fontFamily || "").toLowerCase();
+    const whiteSpace = (style.whiteSpace || "").toLowerCase();
+    const monoFont = (
+      font.includes("mono") ||
+      font.includes("consolas") ||
+      font.includes("courier") ||
+      font.includes("menlo") ||
+      font.includes("monaco")
+    );
+    const preWhiteSpace = ["pre", "pre-wrap", "pre-line", "break-spaces"].includes(whiteSpace);
+    return monoFont || preWhiteSpace;
+  }
+
   function isDomCodeBlockCandidate(el) {
     if (!el || isIgnoredResponseElement(el)) return false;
     const text = readElementTextDeep(el).trim();
@@ -1401,11 +1417,14 @@
       className.includes("code") ||
       role.includes("code") ||
       aria.includes("code") ||
-      hasPlaintextHeader(el)
+      hasPlaintextHeader(el) ||
+      hasCodeVisualStyle(el)
     );
 
     if (!hasCodeShape) return false;
-    return getCodeLineArray(normalizeCodeBlockText(text)).length > 0;
+    const lines = getCodeLineArray(normalizeCodeBlockText(text));
+    if (hasCodeVisualStyle(el)) return lines.length >= 2 || text.length >= 80;
+    return lines.length > 0;
   }
 
   function getResponseScopes(container) {
@@ -1440,7 +1459,7 @@
     collectCodeBlockElements(scope).forEach(el => elements.push(el));
     if (scope.querySelectorAll) {
       scope.querySelectorAll("*").forEach(el => {
-        if (hasPlaintextHeader(el)) elements.push(el);
+        if (hasPlaintextHeader(el) || hasCodeVisualStyle(el)) elements.push(el);
       });
     }
     if (isDomCodeBlockCandidate(scope)) elements.push(scope);
@@ -1448,10 +1467,11 @@
     const unique = uniqueElements(elements).filter(isDomCodeBlockCandidate);
     return unique.filter(b1 => {
       const b1Lines = getCodeLineArray(normalizeCodeBlockText(readElementTextDeep(b1))).length;
-      for (let b2 of elements) {
-        if (b1 === b2 || !b1.contains(b2) || !isDomCodeBlockCandidate(b2)) continue;
+      for (let b2 of unique) {
+        if (b1 === b2 || !isDomCodeBlockCandidate(b2)) continue;
         const b2Lines = getCodeLineArray(normalizeCodeBlockText(readElementTextDeep(b2))).length;
-        if (b2Lines >= Math.max(1, Math.floor(b1Lines * 0.8))) return false;
+        if (b1.contains(b2) && b2Lines >= Math.max(1, Math.floor(b1Lines * 0.8))) return false;
+        if (b2.contains(b1) && b2Lines >= Math.max(2, b1Lines * 2)) return false;
       }
       return true;
     });
