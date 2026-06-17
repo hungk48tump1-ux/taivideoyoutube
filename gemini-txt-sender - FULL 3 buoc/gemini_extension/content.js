@@ -1358,18 +1358,105 @@
     return blocks;
   }
 
-  function getLatestCodeBlocks(container = null) {
-    if (!container) {
-      const containers = getResponseContainers();
-      if (containers.length === 0) return [];
-      container = containers[containers.length - 1];
+  function looksLikeGeneratedLine(line) {
+    const s = (line || "").trim();
+    return /^(\[\d+\]|\(\d+\)|\d+[.)])\s+/.test(s);
+  }
+
+  function splitLinesByExpected(lines, expectedLines = null, minBlocks = 1) {
+    if (!expectedLines || expectedLines <= 0) {
+      return [lines.join("\n").trim()].filter(Boolean);
     }
 
-    const elements = collectCodeBlockElements(container);
+    const blocks = [];
+    for (let i = 0; i + expectedLines <= lines.length; i += expectedLines) {
+      const part = lines.slice(i, i + expectedLines).join("\n").trim();
+      if (part) blocks.push(part);
+      if (blocks.length >= minBlocks && lines.length - (i + expectedLines) < expectedLines) {
+        break;
+      }
+    }
+
+    if (blocks.length === 0 && lines.length > 0) {
+      blocks.push(lines.join("\n").trim());
+    }
+    return blocks;
+  }
+
+  function parseLineRunCodeBlocks(text, expectedLines = null, minBlocks = 1) {
+    const rawLines = (text || "")
+      .replace(/\r\n/g, "\n")
+      .split("\n")
+      .map(line => line.trim())
+      .filter(Boolean);
+
+    const groups = [];
+    let current = [];
+
+    for (const line of rawLines) {
+      if (looksLikeGeneratedLine(line)) {
+        current.push(line);
+      } else if (current.length > 0) {
+        groups.push(current);
+        current = [];
+      }
+    }
+    if (current.length > 0) groups.push(current);
+
+    let blocks = [];
+    for (const group of groups) {
+      if (expectedLines && group.length >= expectedLines) {
+        blocks = blocks.concat(splitLinesByExpected(group, expectedLines, minBlocks - blocks.length));
+      } else if (group.length >= 2) {
+        blocks.push(group.join("\n").trim());
+      }
+      if (blocks.length >= minBlocks) break;
+    }
+
+    return blocks.filter(Boolean);
+  }
+
+  function uniqueTexts(blocks) {
+    const seen = new Set();
+    return blocks.filter(text => {
+      const key = text.replace(/\s+/g, " ").slice(0, 500);
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  }
+
+  function getResponseScopes(container) {
+    const scopes = [];
+    if (!container) return scopes;
+    scopes.push(container);
+
+    const closest = container.closest && container.closest(
+      "model-message, message-content, .model-response-text, article, section"
+    );
+    if (closest && closest !== container) scopes.push(closest);
+
+    let parent = container.parentElement;
+    let depth = 0;
+    while (parent && depth < 4) {
+      if (!isIgnoredResponseElement(parent)) {
+        const textLength = readResponseText(parent).trim().length;
+        if (textLength > 0 && textLength < 60000) scopes.push(parent);
+      }
+      if (parent.matches && parent.matches("main, body")) break;
+      parent = parent.parentElement;
+      depth += 1;
+    }
+
+    return uniqueElements(scopes);
+  }
+
+  function extractCodeBlocksFromScope(scope, expectedLines = null, minBlocks = 1) {
+    const elements = collectCodeBlockElements(scope);
 
     const validElements = elements.filter(b1 => {
       for (let b2 of elements) {
-        if (b1 !== b2 && b1.contains(b2)) return false; 
+        if (b1 !== b2 && b1.contains(b2)) return false;
       }
       return true;
     });
@@ -1379,17 +1466,36 @@
       .map(normalizeCodeBlockText)
       .filter(isLikelyCodeBlockText);
 
-    if (blocks.length === 0) {
-      blocks = parseFencedCodeBlocks(readResponseText(container));
+    const scopeText = readResponseText(scope);
+    if (blocks.length < minBlocks) {
+      blocks = blocks.concat(parseFencedCodeBlocks(scopeText));
+    }
+    if (blocks.length < minBlocks) {
+      blocks = blocks.concat(parseLineRunCodeBlocks(scopeText, expectedLines, minBlocks));
     }
 
-    const seen = new Set();
-    return blocks.filter(text => {
-      const key = text.replace(/\s+/g, " ").slice(0, 500);
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    });
+    return uniqueTexts(blocks);
+  }
+
+  function getLatestCodeBlocks(container = null, expectedLines = null, minBlocks = 1) {
+    if (!container) {
+      const containers = getResponseContainers();
+      if (containers.length === 0) return [];
+      container = containers[containers.length - 1];
+    }
+
+    let bestBlocks = [];
+    for (const scope of getResponseScopes(container)) {
+      const blocks = extractCodeBlocksFromScope(scope, expectedLines, minBlocks);
+      if (blocks.length >= minBlocks) {
+        return blocks;
+      }
+      if (blocks.length > bestBlocks.length) {
+        bestBlocks = blocks;
+      }
+    }
+
+    return bestBlocks;
   }
 
   function getCodeLinesCount(blocks, blockIndex = 0) {
@@ -1670,10 +1776,9 @@
       return;
     }
 
-    let finalBlocks = getLatestCodeBlocks(responseContainer);
-    
     // Kiểm tra xem đã đủ số lượng block tối thiểu chưa (Chunk 1 cần 2 blocks, các chunk sau cần 1 block)
     const minRequiredBlocks = (data.chunk_index === 1) ? 2 : 1;
+    let finalBlocks = getLatestCodeBlocks(responseContainer, data.expected_lines, minRequiredBlocks);
     
     if (finalBlocks.length < minRequiredBlocks && data.expected_lines !== null) {
       addSidebarLog(`⏳ Chưa đủ ${minRequiredBlocks} code blocks (hiện có: ${finalBlocks.length}), chờ tối đa 450s...`, "warning");
@@ -1684,21 +1789,21 @@
       while (Date.now() < cbDeadline) {
         await sleep(30000);
         elapsed += 30;
-        finalBlocks = getLatestCodeBlocks(responseContainer);
+        finalBlocks = getLatestCodeBlocks(responseContainer, data.expected_lines, minRequiredBlocks);
         
         // Đặc thù Chunk 1: đã có 1 block ổn định -> chờ tiếp block thứ 2 thêm 450s theo cấu hình hiện tại
         if (data.chunk_index === 1 && finalBlocks.length === 1) {
           addSidebarLog("✅ Đã nhận được code block 1. Chờ ổn định code block 1 trước...", "success");
           try {
             await waitForResponse(60, responseBaseline); // Chờ ổn định code block 1
-            finalBlocks = getLatestCodeBlocks(responseContainer);
+            finalBlocks = getLatestCodeBlocks(responseContainer, data.expected_lines, minRequiredBlocks);
           } catch (e) {}
           
           if (finalBlocks.length >= 2) {
             addSidebarLog("✅ Code block 2 đã xuất hiện cùng lúc! Chờ ổn định toàn bộ...", "success");
             try {
               await waitForResponse(60, responseBaseline);
-              finalBlocks = getLatestCodeBlocks(responseContainer);
+              finalBlocks = getLatestCodeBlocks(responseContainer, data.expected_lines, minRequiredBlocks);
             } catch (e) {}
             found = true;
             break;
@@ -1712,13 +1817,13 @@
           while (Date.now() < block2Deadline) {
             await sleep(30000);
             elapsed2 += 30;
-            finalBlocks = getLatestCodeBlocks(responseContainer);
+            finalBlocks = getLatestCodeBlocks(responseContainer, data.expected_lines, minRequiredBlocks);
             
             if (finalBlocks.length >= 2) {
               addSidebarLog(`✅ Code block 2 đã xuất hiện sau ${elapsed2}s chờ thêm! Chờ ổn định toàn bộ...`, "success");
               try {
                 await waitForResponse(60, responseBaseline);
-                finalBlocks = getLatestCodeBlocks(responseContainer);
+                finalBlocks = getLatestCodeBlocks(responseContainer, data.expected_lines, minRequiredBlocks);
               } catch (e) {}
               found2 = true;
               break;
@@ -1739,7 +1844,7 @@
           addSidebarLog(`✅ Đã nhận đủ ${finalBlocks.length} code blocks sau ${elapsed}s. Chờ ổn định thêm 15s...`, "success");
           try {
             await waitForResponse(60, responseBaseline);
-            finalBlocks = getLatestCodeBlocks(responseContainer);
+            finalBlocks = getLatestCodeBlocks(responseContainer, data.expected_lines, minRequiredBlocks);
           } catch (e) {
             // Bỏ qua lỗi chờ phụ
           }
