@@ -1625,6 +1625,99 @@
     });
   }
 
+  function getCopyButtonCandidates() {
+    const selectors = [
+      "button",
+      "[role='button']",
+      "[aria-label]",
+      "[title]"
+    ];
+    const nodes = uniqueElements(Array.from(document.querySelectorAll(selectors.join(", "))));
+    return nodes.filter(el => {
+      if (!isVisible(el) || isIgnoredResponseElement(el)) return false;
+      const label = [
+        el.getAttribute && el.getAttribute("aria-label"),
+        el.getAttribute && el.getAttribute("title"),
+        el.innerText,
+        el.textContent
+      ].filter(Boolean).join(" ").toLowerCase();
+
+      if (/download|tải xuống|tai xuong/.test(label)) return false;
+      return /copy|clipboard|sao ch.p|sao chep|content_copy/.test(label);
+    });
+  }
+
+  async function readClipboardSafe() {
+    try {
+      if (navigator.clipboard && navigator.clipboard.readText) {
+        return await navigator.clipboard.readText();
+      }
+    } catch (e) {}
+    return "";
+  }
+
+  async function writeClipboardSafe(text) {
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(text || "");
+      }
+    } catch (e) {}
+  }
+
+  async function getCodeBlocksViaCopyButtons(expectedLines = null, minBlocks = 1, baselineButtonCount = 0) {
+    if (!expectedLines || expectedLines <= 0) return [];
+    const buttons = getCopyButtonCandidates();
+    const newButtons = buttons.slice(Math.max(0, baselineButtonCount));
+    const originalClipboard = await readClipboardSafe();
+    const blocks = [];
+
+    for (const btn of newButtons) {
+      if (blocks.length >= minBlocks) break;
+      try {
+        btn.scrollIntoView({ block: "center", inline: "center" });
+        await sleep(100);
+        btn.click();
+        await sleep(350);
+        const copied = normalizeCodeBlockText(await readClipboardSafe());
+        const lineCount = getCodeLineArray(copied).length;
+        if (lineCount === expectedLines && !blocks.includes(copied)) {
+          blocks.push(copied);
+        }
+      } catch (e) {}
+    }
+
+    if (originalClipboard) {
+      await writeClipboardSafe(originalClipboard);
+    }
+
+    lastCodeBlockDiagnostics = {
+      responseTextLength: lastCodeBlockDiagnostics ? lastCodeBlockDiagnostics.responseTextLength : 0,
+      candidateCount: newButtons.length,
+      candidates: newButtons.slice(0, 5).map((btn, index) => ({
+        index,
+        tagName: (btn.tagName || "").toLowerCase(),
+        className: getElementClassName(btn),
+        textLength: (btn.innerText || btn.textContent || "").length,
+        lineCount: 0,
+        preview: [(btn.getAttribute && (btn.getAttribute("aria-label") || btn.getAttribute("title"))) || (btn.innerText || btn.textContent || "")]
+      })),
+      blockCount: blocks.length,
+      source: "copy_button"
+    };
+    return blocks;
+  }
+
+  async function getLatestCodeBlocksResolved(container = null, expectedLines = null, minBlocks = 1, baselineButtonCount = 0) {
+    let blocks = getLatestCodeBlocks(container, expectedLines, minBlocks);
+    if (blocks.length >= minBlocks) return blocks;
+
+    const copiedBlocks = await getCodeBlocksViaCopyButtons(expectedLines, minBlocks, baselineButtonCount);
+    if (copiedBlocks.length > blocks.length) {
+      return copiedBlocks;
+    }
+    return blocks;
+  }
+
   function getCodeLinesCount(blocks, blockIndex = 0) {
     if (blockIndex < blocks.length) {
       const text = blocks[blockIndex];
@@ -1850,6 +1943,7 @@
     await ensureModel("Pro");
 
     const responseBaseline = getLatestResponseSnapshot();
+    const codeCopyButtonBaseline = getCopyButtonCandidates().length;
 
     // 3. Click nút gửi
     updateStatus("Đang bấm gửi...", true, `Gửi chunk ${data.chunk_index}`);
@@ -1905,7 +1999,7 @@
 
     // Kiểm tra xem đã đủ số lượng block tối thiểu chưa (Chunk 1 cần 2 blocks, các chunk sau cần 1 block)
     const minRequiredBlocks = (data.chunk_index === 1) ? 2 : 1;
-    let finalBlocks = getLatestCodeBlocks(responseContainer, data.expected_lines, minRequiredBlocks);
+    let finalBlocks = await getLatestCodeBlocksResolved(responseContainer, data.expected_lines, minRequiredBlocks, codeCopyButtonBaseline);
     logCodeBlockDiagnostics(`Quét codeblock DOM lần đầu cho chunk ${data.chunk_index}`, responseInfo);
     
     if (finalBlocks.length < minRequiredBlocks && data.expected_lines !== null) {
@@ -1917,7 +2011,7 @@
       while (Date.now() < cbDeadline) {
         await sleep(30000);
         elapsed += 30;
-        finalBlocks = getLatestCodeBlocks(responseContainer, data.expected_lines, minRequiredBlocks);
+        finalBlocks = await getLatestCodeBlocksResolved(responseContainer, data.expected_lines, minRequiredBlocks, codeCopyButtonBaseline);
         logCodeBlockDiagnostics(`Quét codeblock DOM sau ${elapsed}s cho chunk ${data.chunk_index}`, responseInfo);
         
         // Đặc thù Chunk 1: đã có 1 block ổn định -> chờ tiếp block thứ 2 thêm 450s theo cấu hình hiện tại
@@ -1925,14 +2019,14 @@
           addSidebarLog("✅ Đã nhận được code block 1. Chờ ổn định code block 1 trước...", "success");
           try {
             await waitForResponse(60, responseBaseline); // Chờ ổn định code block 1
-            finalBlocks = getLatestCodeBlocks(responseContainer, data.expected_lines, minRequiredBlocks);
+            finalBlocks = await getLatestCodeBlocksResolved(responseContainer, data.expected_lines, minRequiredBlocks, codeCopyButtonBaseline);
           } catch (e) {}
           
           if (finalBlocks.length >= 2) {
             addSidebarLog("✅ Code block 2 đã xuất hiện cùng lúc! Chờ ổn định toàn bộ...", "success");
             try {
               await waitForResponse(60, responseBaseline);
-              finalBlocks = getLatestCodeBlocks(responseContainer, data.expected_lines, minRequiredBlocks);
+              finalBlocks = await getLatestCodeBlocksResolved(responseContainer, data.expected_lines, minRequiredBlocks, codeCopyButtonBaseline);
             } catch (e) {}
             found = true;
             break;
@@ -1946,13 +2040,13 @@
           while (Date.now() < block2Deadline) {
             await sleep(30000);
             elapsed2 += 30;
-            finalBlocks = getLatestCodeBlocks(responseContainer, data.expected_lines, minRequiredBlocks);
+            finalBlocks = await getLatestCodeBlocksResolved(responseContainer, data.expected_lines, minRequiredBlocks, codeCopyButtonBaseline);
             
             if (finalBlocks.length >= 2) {
               addSidebarLog(`✅ Code block 2 đã xuất hiện sau ${elapsed2}s chờ thêm! Chờ ổn định toàn bộ...`, "success");
               try {
                 await waitForResponse(60, responseBaseline);
-                finalBlocks = getLatestCodeBlocks(responseContainer, data.expected_lines, minRequiredBlocks);
+                finalBlocks = await getLatestCodeBlocksResolved(responseContainer, data.expected_lines, minRequiredBlocks, codeCopyButtonBaseline);
               } catch (e) {}
               found2 = true;
               break;
@@ -1973,7 +2067,7 @@
           addSidebarLog(`✅ Đã nhận đủ ${finalBlocks.length} code blocks sau ${elapsed}s. Chờ ổn định thêm 15s...`, "success");
           try {
             await waitForResponse(60, responseBaseline);
-            finalBlocks = getLatestCodeBlocks(responseContainer, data.expected_lines, minRequiredBlocks);
+            finalBlocks = await getLatestCodeBlocksResolved(responseContainer, data.expected_lines, minRequiredBlocks, codeCopyButtonBaseline);
           } catch (e) {
             // Bỏ qua lỗi chờ phụ
           }
