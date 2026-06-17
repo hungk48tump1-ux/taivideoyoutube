@@ -1654,6 +1654,22 @@
     });
   }
 
+  function getNearbyCodeCardText(el) {
+    let node = el;
+    for (let depth = 0; node && depth < 9; depth += 1) {
+      const text = node.innerText || node.textContent || "";
+      const className = getElementClassName(node).toLowerCase();
+      if (
+        /Plaintext|Doan ma|\u0110o\u1ea1n m\u00e3|^\s*\[\d{1,3}\]/m.test(text) ||
+        /code|code-block|model|response/.test(className)
+      ) {
+        return text;
+      }
+      node = node.parentElement;
+    }
+    return "";
+  }
+
   function getCopyButtonCandidates() {
     const selectors = [
       "button",
@@ -1677,9 +1693,8 @@
 
       const smallIconButton = rect.width > 10 && rect.width <= 64 && rect.height > 10 && rect.height <= 64;
       if (!smallIconButton) return false;
-      const codeCard = el.closest("ms-code-block, code-block, bard-code-block, pre, [class*='code'], div");
-      const cardText = codeCard ? (codeCard.innerText || codeCard.textContent || "") : "";
-      return /Plaintext|Đoạn mã|Doan ma|^\s*\[\d{1,3}\]/m.test(cardText);
+      const cardText = getNearbyCodeCardText(el);
+      return /Plaintext|Doan ma|\u0110o\u1ea1n m\u00e3|^\s*\[\d{1,3}\]/m.test(cardText);
     });
   }
 
@@ -2125,23 +2140,17 @@
       while (Date.now() < cbDeadline) {
         await sleep(30000);
         elapsed += 30;
-        finalBlocks = await getLatestCodeBlocksResolved(responseContainer, data.expected_lines, minRequiredBlocks, codeCopyButtonBaseline);
+        finalBlocks = await getLatestCodeBlocksResolved(null, data.expected_lines, minRequiredBlocks, codeCopyButtonBaseline);
         logCodeBlockDiagnostics(`Quét codeblock DOM sau ${elapsed}s cho chunk ${data.chunk_index}`, responseInfo);
         
         // Đặc thù Chunk 1: đã có 1 block ổn định -> chờ tiếp block thứ 2 thêm 450s theo cấu hình hiện tại
         if (data.chunk_index === 1 && finalBlocks.length === 1) {
-          addSidebarLog("✅ Đã nhận được code block 1. Chờ ổn định code block 1 trước...", "success");
-          try {
-            await waitForResponse(60, responseBaseline); // Chờ ổn định code block 1
-            finalBlocks = await getLatestCodeBlocksResolved(responseContainer, data.expected_lines, minRequiredBlocks, codeCopyButtonBaseline);
-          } catch (e) {}
+          addSidebarLog("✅ Đã nhận được code block 1. Bắt đầu quét/copy trực tiếp để tìm code block 2...", "success");
+          finalBlocks = await getLatestCodeBlocksResolved(null, data.expected_lines, minRequiredBlocks, codeCopyButtonBaseline);
+          logCodeBlockDiagnostics(`Quét lại toàn trang tìm code block 2 cho chunk ${data.chunk_index}`, responseInfo);
           
           if (finalBlocks.length >= 2) {
-            addSidebarLog("✅ Code block 2 đã xuất hiện cùng lúc! Chờ ổn định toàn bộ...", "success");
-            try {
-              await waitForResponse(60, responseBaseline);
-              finalBlocks = await getLatestCodeBlocksResolved(responseContainer, data.expected_lines, minRequiredBlocks, codeCopyButtonBaseline);
-            } catch (e) {}
+            addSidebarLog("✅ Code block 2 đã xuất hiện cùng lúc!", "success");
             found = true;
             break;
           }
@@ -2154,14 +2163,11 @@
           while (Date.now() < block2Deadline) {
             await sleep(30000);
             elapsed2 += 30;
-            finalBlocks = await getLatestCodeBlocksResolved(responseContainer, data.expected_lines, minRequiredBlocks, codeCopyButtonBaseline);
+            finalBlocks = await getLatestCodeBlocksResolved(null, data.expected_lines, minRequiredBlocks, codeCopyButtonBaseline);
+            logCodeBlockDiagnostics(`Quét/copy code block 2 sau ${elapsed2}s cho chunk ${data.chunk_index}`, responseInfo);
             
             if (finalBlocks.length >= 2) {
-              addSidebarLog(`✅ Code block 2 đã xuất hiện sau ${elapsed2}s chờ thêm! Chờ ổn định toàn bộ...`, "success");
-              try {
-                await waitForResponse(60, responseBaseline);
-                finalBlocks = await getLatestCodeBlocksResolved(responseContainer, data.expected_lines, minRequiredBlocks, codeCopyButtonBaseline);
-              } catch (e) {}
+              addSidebarLog(`✅ Code block 2 đã xuất hiện sau ${elapsed2}s chờ thêm!`, "success");
               found2 = true;
               break;
             }
@@ -2178,13 +2184,7 @@
         }
         
         if (finalBlocks.length >= minRequiredBlocks) {
-          addSidebarLog(`✅ Đã nhận đủ ${finalBlocks.length} code blocks sau ${elapsed}s. Chờ ổn định thêm 15s...`, "success");
-          try {
-            await waitForResponse(60, responseBaseline);
-            finalBlocks = await getLatestCodeBlocksResolved(responseContainer, data.expected_lines, minRequiredBlocks, codeCopyButtonBaseline);
-          } catch (e) {
-            // Bỏ qua lỗi chờ phụ
-          }
+          addSidebarLog(`✅ Đã nhận đủ ${finalBlocks.length} code blocks sau ${elapsed}s.`, "success");
           found = true;
           break;
         }
