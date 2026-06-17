@@ -1508,8 +1508,37 @@
 
   function splitTextIntoLineCountBlocks(text, expectedLines = null, minBlocks = 1) {
     if (!expectedLines || expectedLines <= 0) return [];
-    const normalized = normalizeCodeBlockText(text);
-    const lines = getCodeLineArray(normalized);
+
+    const rawLines = (text || "").replace(/\r\n/g, "\n").replace(/\u00a0/g, " ").split("\n");
+    const isSectionMarker = line => /^(RUN_COUNT\s*=|Plaintext$|Đoạn mã$|Doan ma$|Code$)/i.test((line || "").trim());
+    const cleanLines = lines => getCodeLineArray(
+      normalizeCodeBlockText(lines.filter(line => !isSectionMarker(line)).join("\n"))
+    );
+
+    let separatorIndex = -1;
+    for (let i = rawLines.length - 1; i >= 0; i--) {
+      if (isSectionMarker(rawLines[i])) {
+        separatorIndex = i;
+        break;
+      }
+    }
+
+    if (separatorIndex >= 0) {
+      const beforeLines = cleanLines(rawLines.slice(0, separatorIndex));
+      const afterLines = cleanLines(rawLines.slice(separatorIndex + 1));
+      const blocks = [];
+
+      if (minBlocks >= 2 && beforeLines.length >= expectedLines) {
+        blocks.push(beforeLines.slice(-expectedLines).join("\n"));
+      }
+      if (afterLines.length >= expectedLines) {
+        blocks.push(afterLines.slice(0, expectedLines).join("\n"));
+      }
+      if (blocks.length >= minBlocks) return blocks;
+      if (minBlocks === 1 && blocks.length > 0) return blocks;
+    }
+
+    const lines = cleanLines(rawLines);
     if (lines.length < expectedLines) return [];
 
     const blocks = [];
@@ -1589,7 +1618,7 @@
           candidateCount: bestCandidates.length,
           candidates: bestCandidateDiagnostics,
           blockCount: textBlocks.length,
-          source: "response_text_line_count"
+          source: "response_text_sections"
         };
         return textBlocks;
       }
