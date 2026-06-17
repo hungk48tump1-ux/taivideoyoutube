@@ -1363,6 +1363,11 @@
     return /^(\[\d+\]|\(\d+\)|\d+[.)])\s+/.test(s);
   }
 
+  function looksLikeSquareGeneratedLine(line) {
+    const s = (line || "").trim();
+    return /^\[\d+\]\s+/.test(s);
+  }
+
   function splitLinesByExpected(lines, expectedLines = null, minBlocks = 1) {
     if (!expectedLines || expectedLines <= 0) {
       return [lines.join("\n").trim()].filter(Boolean);
@@ -1390,19 +1395,30 @@
       .map(line => line.trim())
       .filter(Boolean);
 
-    const groups = [];
+    const squareGroups = [];
+    const looseGroups = [];
     let current = [];
+    let currentIsSquare = false;
 
     for (const line of rawLines) {
       if (looksLikeGeneratedLine(line)) {
+        const isSquare = looksLikeSquareGeneratedLine(line);
+        if (current.length > 0 && currentIsSquare !== isSquare) {
+          (currentIsSquare ? squareGroups : looseGroups).push(current);
+          current = [];
+        }
+        currentIsSquare = isSquare;
         current.push(line);
       } else if (current.length > 0) {
-        groups.push(current);
+        (currentIsSquare ? squareGroups : looseGroups).push(current);
         current = [];
       }
     }
-    if (current.length > 0) groups.push(current);
+    if (current.length > 0) {
+      (currentIsSquare ? squareGroups : looseGroups).push(current);
+    }
 
+    const groups = squareGroups.length > 0 ? squareGroups : looseGroups;
     let blocks = [];
     for (const group of groups) {
       if (expectedLines && group.length >= expectedLines) {
@@ -1477,6 +1493,30 @@
     return uniqueTexts(blocks);
   }
 
+  function getDocumentTextFallbackCodeBlocks(expectedLines = null, minBlocks = 1) {
+    const scopes = [];
+    getResponseContainers().forEach(el => scopes.push(el));
+    document.querySelectorAll("model-message, message-content, main").forEach(el => scopes.push(el));
+    if (document.body) scopes.push(document.body);
+
+    let bestBlocks = [];
+    const orderedScopes = uniqueElements(scopes).reverse();
+    for (const scope of orderedScopes) {
+      if (isIgnoredResponseElement(scope)) continue;
+      const text = readResponseText(scope);
+      const blocks = uniqueTexts(
+        parseFencedCodeBlocks(text).concat(parseLineRunCodeBlocks(text, expectedLines, minBlocks))
+      );
+      if (blocks.length >= minBlocks) {
+        return blocks.slice(-minBlocks);
+      }
+      if (blocks.length > bestBlocks.length) {
+        bestBlocks = blocks;
+      }
+    }
+    return bestBlocks;
+  }
+
   function getLatestCodeBlocks(container = null, expectedLines = null, minBlocks = 1) {
     if (!container) {
       const containers = getResponseContainers();
@@ -1492,6 +1532,13 @@
       }
       if (blocks.length > bestBlocks.length) {
         bestBlocks = blocks;
+      }
+    }
+
+    if (bestBlocks.length < minBlocks) {
+      const fallbackBlocks = getDocumentTextFallbackCodeBlocks(expectedLines, minBlocks);
+      if (fallbackBlocks.length >= minBlocks || fallbackBlocks.length > bestBlocks.length) {
+        return fallbackBlocks;
       }
     }
 
