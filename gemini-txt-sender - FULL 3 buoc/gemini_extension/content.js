@@ -1328,7 +1328,7 @@
   function normalizeCodeBlockText(raw) {
     let txt = (raw || "").replace(/\r\n/g, "\n").replace(/\u00a0/g, " ");
     let lines = txt.split("\n").map(line => line.trimEnd());
-    const uiLinePattern = /^(Plaintext|Text|Python|Javascript|JavaScript|TypeScript|HTML|CSS|JSON|Markdown|C\+\+|Java|Copy code|Copy|Sao ch.p m.|Sao chep ma|Tải xuống|Download|Wrap|M. r.ng)$/i;
+    const uiLinePattern = /^(Plaintext|Đoạn mã|Doan ma|Text|Python|Javascript|JavaScript|TypeScript|HTML|CSS|JSON|Markdown|C\+\+|Java|Copy code|Copy|Sao ch.p m.|Sao chep ma|Tải xuống|Download|Wrap|M. r.ng)$/i;
 
     while (lines.length && (!lines[0].trim() || uiLinePattern.test(lines[0].trim()))) {
       lines.shift();
@@ -1379,10 +1379,10 @@
     return cls.replace(/\s+/g, " ").trim().slice(0, 160);
   }
 
-  function hasPlaintextHeader(el) {
+  function hasCodeBlockHeader(el) {
     if (!el) return false;
     const text = readElementTextDeep(el).trimStart();
-    return /^Plaintext(\n|\r|\s{2,})/i.test(text);
+    return /^(Plaintext|Code|Đoạn mã)(\n|\r|\s{2,}|$)/i.test(text);
   }
 
   function hasCodeVisualStyle(el) {
@@ -1417,7 +1417,7 @@
       className.includes("code") ||
       role.includes("code") ||
       aria.includes("code") ||
-      hasPlaintextHeader(el) ||
+      hasCodeBlockHeader(el) ||
       hasCodeVisualStyle(el)
     );
 
@@ -1459,7 +1459,7 @@
     collectCodeBlockElements(scope).forEach(el => elements.push(el));
     if (scope.querySelectorAll) {
       scope.querySelectorAll("*").forEach(el => {
-        if (hasPlaintextHeader(el) || hasCodeVisualStyle(el)) elements.push(el);
+        if (hasCodeBlockHeader(el) || hasCodeVisualStyle(el)) elements.push(el);
       });
     }
     if (isDomCodeBlockCandidate(scope)) elements.push(scope);
@@ -1506,6 +1506,15 @@
     };
   }
 
+  function getGlobalCodeBlockScopes() {
+    const scopes = [];
+    document.querySelectorAll("model-message, message-content, .model-response-text, article, section, main").forEach(el => {
+      scopes.push(el);
+    });
+    if (document.body) scopes.push(document.body);
+    return uniqueElements(scopes).reverse();
+  }
+
   function getLatestCodeBlocks(container = null, expectedLines = null, minBlocks = 1) {
     if (!container) {
       const containers = getResponseContainers();
@@ -1533,6 +1542,29 @@
         bestBlocks = blocks;
         bestCandidates = extracted.candidates;
         bestCandidateDiagnostics = extracted.candidateDiagnostics;
+      }
+    }
+
+    if (bestBlocks.length < minBlocks) {
+      for (const scope of getGlobalCodeBlockScopes()) {
+        if (isIgnoredResponseElement(scope)) continue;
+        const extracted = extractCodeBlocksFromScope(scope, expectedLines, minBlocks);
+        const blocks = extracted.blocks;
+        if (blocks.length >= minBlocks) {
+          lastCodeBlockDiagnostics = {
+            responseTextLength: readResponseText(container).length,
+            candidateCount: extracted.candidates.length,
+            candidates: extracted.candidateDiagnostics,
+            blockCount: blocks.length,
+            source: "dom_global"
+          };
+          return blocks.slice(-minBlocks);
+        }
+        if (blocks.length > bestBlocks.length) {
+          bestBlocks = blocks;
+          bestCandidates = extracted.candidates;
+          bestCandidateDiagnostics = extracted.candidateDiagnostics;
+        }
       }
     }
 
